@@ -1376,7 +1376,10 @@ void insert_macs_from_file() {
 }
 
 
-// TODO: This list only ever seems to get longer.  Why do we need it?
+// MACs never to be kicked (ubus add_mac, peers' addmac, /tmp/dawn_mac_list).
+// Entries are never removed, and peers can add to it, so it is capped.
+// Returns the new entry, or NULL if the MAC was already listed, the list is
+// full, or allocation failed.
 struct mac_entry_s *insert_to_maclist(struct dawn_mac mac) {
     dawnlog_debug_func("Entering...");
 
@@ -1384,7 +1387,20 @@ struct mac_entry_s *insert_to_maclist(struct dawn_mac mac) {
 
     if (mac_find_entry(mac) == NULL)
     {
-        struct mac_entry_s* new_mac = dawn_malloc(sizeof(struct mac_entry_s));
+        if (mac_set_last >= MAC_LIST_MAX) {
+            static time_t last_warning = 0;
+            time_t now = time(0);
+            if (now - last_warning >= 60 || now < last_warning) {
+                dawnlog_warning("MAC list is full (%d entries), not adding " MACSTR "\n", MAC_LIST_MAX, MAC2STR(mac.u8));
+                last_warning = now;
+            }
+            return NULL;
+        }
+
+        // (This used to declare a second new_mac here, shadowing the one
+        // returned, so the function always returned NULL and new entries
+        // were never written to the MAC list file.)
+        new_mac = dawn_malloc(sizeof(struct mac_entry_s));
         if (new_mac == NULL)
         {
             dawnlog_error("malloc of MAC struct failed!\n");

@@ -1545,12 +1545,16 @@ int parse_add_mac_to_file(struct blob_attr *msg) {
             continue;
         }
 
-        // Returns item if it was new and added
-        if (insert_to_maclist(addr)) {
-            // TODO: File can grow arbitarily large.  Resource consumption risk.
-            // TODO: Consolidate use of file across source: shared resource for name, single point of access?
+        // Returns item if it was new and added. The list is read by the
+        // kicking logic under client_array_mutex, and this can run on the UDP
+        // receive thread in broadcast / multicast mode, so take the same lock.
+        dawn_mutex_lock(&client_array_mutex);
+        bool added = insert_to_maclist(addr) != NULL;
+        dawn_mutex_unlock(&client_array_mutex);
+
+        // Bounded by MAC_LIST_MAX: only new entries are appended
+        if (added)
             write_mac_to_file("/tmp/dawn_mac_list", addr);
-        }
     }
 
     return 0;
