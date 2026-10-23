@@ -1,0 +1,26 @@
+name: Host tests (ASan/UBSan)
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake libjson-c-dev
+
+      - name: Build libubox and ubus
+        run: PREFIX="$HOME/deps" tools/ci/build-host-deps.sh
+
+      - name: Run tests
+        run: PREFIX="$HOME/deps" tools/ci/run-host-tests.sh

@@ -1,0 +1,90 @@
+name: OpenWrt packages
+
+# Builds installable dawn + luci-app-dawn packages with the official OpenWrt
+# SDK. 24.10 produces .ipk (opkg), 25.12 produces .apk (apk).
+# Every run uploads them as workflow artifacts; pushing a tag like v1 also
+# publishes them as a GitHub release.
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: OpenWrt ${{ matrix.release }} / ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        release: [ '24.10', '25.12' ]
+        arch:
+          - aarch64_cortex-a53        # MediaTek Filogic (Banana Pi R3/R4, GL.iNet MT6000), IPQ60xx/807x
+          - arm_cortex-a7_neon-vfpv4  # Qualcomm IPQ40xx
+          - mipsel_24kc               # MediaTek MT7621
+          - mips_24kc                 # Qualcomm Atheros ath79
+          - x86_64                    # PCs / VMs
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stamp package release with run number
+        run: |
+          sed -i "s/^PKG_RELEASE:=.*/PKG_RELEASE:=${{ github.run_number }}/" \
+            openwrt/dawn/Makefile openwrt/luci-app-dawn/Makefile
+
+      - name: Build with OpenWrt SDK
+        uses: openwrt/gh-action-sdk@v11
+        env:
+          ARCH: ${{ matrix.arch }}-openwrt-${{ matrix.release }}
+          FEEDNAME: dawn_dev
+          PACKAGES: dawn luci-app-dawn
+          V: s
+
+      - name: Collect packages
+        # The SDK action chowns the workspace to uid 1000, so collect outside it
+        run: |
+          OUT="$RUNNER_TEMP/out"
+          mkdir -p "$OUT"
+          find bin/packages/${{ matrix.arch }}/dawn_dev -type f \( -name '*.ipk' -o -name '*.apk' \) -exec cp -v {} "$OUT"/ \;
+          test -n "$(ls "$OUT")" || { echo "No packages were produced"; ls -R bin/packages || true; exit 1; }
+          ls -la "$OUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dawn-openwrt-${{ matrix.release }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/out/
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Bundle one archive per OpenWrt release / architecture
+        run: |
+          mkdir -p release
+          for d in artifacts/*/; do
+            name=$(basename "$d")
+            tar -C "$d" -czf "release/$name.tar.gz" .
+          done
+          ls -la release
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" release/*.tar.gz \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "DAWN dev build ${GITHUB_REF_NAME}" \
+            --notes "Test packages for OpenWrt 24.10 (.ipk) and 25.12 (.apk). See DEPLOY.md for installation." \
+            --prerelease
