@@ -16,6 +16,12 @@ const callDawnGetHearingMap = rpc.declare({
 	expect: { }
 });
 
+const callDawnGetStats = rpc.declare({
+	object: 'dawn',
+	method: 'get_stats',
+	expect: { }
+});
+
 const callHostHints = rpc.declare({
 	object: 'luci-rpc',
 	method: 'getHostHints',
@@ -84,6 +90,7 @@ function getDawnServiceNotRunningErrorMessage() {
 return L.Class.extend({
 	callDawnGetNetwork: callDawnGetNetwork, 
 	callDawnGetHearingMap: callDawnGetHearingMap,
+	callDawnGetStats: callDawnGetStats,
 	callHostHints: callHostHints,
 	isDawnRPCAvailable: isDawnRPCAvailable,
 	getAvailableText: getAvailableText,

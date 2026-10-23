@@ -4,7 +4,7 @@
 		"read": {
 			"uci": [ "dawn", "wireless" ],
 			"ubus": {
-				"dawn": [ "get_network", "get_hearing_map" ],
+				"dawn": [ "get_network", "get_hearing_map", "get_stats" ],
 				"luci-rpc": [ "getHostHints", "getBoardJSON", "getNetworkDevices", "getWirelessDevices" ],
 				"network": [ "get_proto_handlers" ],
 				"network.interface": [ "dump" ]

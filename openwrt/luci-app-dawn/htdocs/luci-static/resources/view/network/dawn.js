@@ -109,6 +109,47 @@ var CBI80211StatusCode = form.ListValue.extend(/** @lends LuCI.form.ListValue.pr
 	},
 });
 
+/*
+ * Steering presets: each sets a few options of the 'global' metric section.
+ * 'balanced' is DAWN's built-in default behaviour.
+ */
+var PRESET_DEFAULTS = { kicking: '3', kicking_threshold: '20', min_number_to_kick: '3', bandwidth_threshold: '6' };
+var PRESETS = {
+	off:        { kicking: '0' },
+	gentle:     { kicking: '1', kicking_threshold: '30', min_number_to_kick: '5', bandwidth_threshold: '6' },
+	balanced:   { kicking: '3', kicking_threshold: '20', min_number_to_kick: '3', bandwidth_threshold: '6' },
+	aggressive: { kicking: '3', kicking_threshold: '10', min_number_to_kick: '2', bandwidth_threshold: '0' }
+};
+
+function currentPreset() {
+	function get(opt) {
+		var v = uci.get('dawn', 'global', opt);
+		return (v == null || v === '') ? PRESET_DEFAULTS[opt] : String(v);
+	}
+
+	if (get('kicking') == '0')
+		return 'off';
+
+	for (var name in PRESETS) {
+		if (name == 'off')
+			continue;
+		var match = true;
+		for (var opt in PRESETS[name])
+			if (get(opt) != PRESETS[name][opt])
+				match = false;
+		if (match)
+			return name;
+	}
+
+	return 'custom';
+}
+
+function randomHexKey() {
+	var bytes = new Uint8Array(32);
+	window.crypto.getRandomValues(bytes);
+	return Array.prototype.map.call(bytes, function(b) { return ('0' + b.toString(16)).slice(-2); }).join('');
+}
+
 return view.extend({
 	load: function() {
 		return Promise.all([
@@ -124,7 +165,73 @@ return view.extend({
 
 		m = new form.Map('dawn',
 			_('DAWN'),
-			_('DAWN Form Configuration.'));
+			_('Decentralized Wi-Fi controller: moves clients to the best access point. Configure each access point the same way; Status → DAWN → Setup Check verifies the rest of the system.'));
+
+		/* ---------- Simple settings ---------- */
+
+		s = m.section(form.NamedSection, 'global', 'metric', _('Steering'));
+		s.addremove = (uci.get('dawn', 'global') == null);
+
+		o = s.option(form.ListValue, '_preset', _('Steering behaviour'),
+			_('How readily DAWN moves clients to a better access point. Off: watch only. Gentle: only clearly better APs, after more checks. Balanced: DAWN defaults. Aggressive: smaller improvements, sooner, even during transfers. Choosing a preset fills in the advanced options below.'));
+		o.value('off', _('Off'));
+		o.value('gentle', _('Gentle'));
+		o.value('balanced', _('Balanced (default)'));
+		o.value('aggressive', _('Aggressive'));
+		o.value('custom', _('Custom (set under Advanced)'));
+		o.cfgvalue = function() { return currentPreset(); };
+		o.onchange = function(ev, section_id, value) {
+			var preset = PRESETS[value];
+			if (!preset)
+				return;
+			for (var opt in preset) {
+				var field = this.map.lookupOption(opt, section_id);
+				var el = field ? field[0].getUIElement(section_id) : null;
+				if (el)
+					el.setValue(preset[opt]);
+			}
+		};
+		o.write = function(section_id, value) {
+			var preset = PRESETS[value];
+			for (var opt in preset || {})
+				uci.set('dawn', section_id, opt, preset[opt]);
+		};
+		o.remove = function() {};
+
+		s = m.section(form.NamedSection, '@network[0]', 'network', _('Peer security'),
+			_('DAWN instances exchange data over the network. With a shared key, messages from devices without it are ignored. Use the same key on every access point.'));
+
+		o = s.option(form.Value, 'auth_key', _('Shared key'),
+			_('64 hexadecimal characters. Leave empty to accept messages from any device that can reach the DAWN port (not recommended).'));
+		o.password = true;
+		o.rmempty = true;
+		o.validate = function(section_id, value) {
+			if (value == null || value === '' || /^[0-9a-fA-F]{64}$/.test(value))
+				return true;
+			return _('Must be exactly 64 hexadecimal characters');
+		};
+
+		o = s.option(form.Button, '_generate_key', ' ', _('Creates a new random key in the field above. Save, then copy the same key to every other access point.'));
+		o.inputtitle = _('Generate new key');
+		o.inputstyle = 'apply';
+		o.onclick = function(ev, section_id) {
+			var field = this.map.lookupOption('auth_key', section_id);
+			var el = field ? field[0].getUIElement(section_id) : null;
+			if (el)
+				el.setValue(randomHexKey());
+		};
+		o.write = function() {};
+		o.remove = function() {};
+
+		o = s.option(form.ListValue, 'accept_config_push', _('Accept settings from other APs'),
+			_('When you change DAWN settings on one AP, it sends them to the others.'));
+		o.value('2', _('Only with shared key (default)'));
+		o.value('1', _('From any device (unsafe)'));
+		o.value('0', _('Never'));
+		o.default = '2';
+
+		/* ---------- Advanced settings (moved into a <details> after render) ---------- */
+		var SIMPLE_SECTIONS = 2;
 
 		s = m.section(form.NamedSection, '@local[0]', 'local',
 			_('Local'),
@@ -140,6 +247,7 @@ return view.extend({
 		o.value('2', _('Trace algorithm decisions - for debugging'));
 		o.value('3', _('Broad low-level tracing - for debugging'));
 		o.default = '0';
+		o.rmempty = false;
 
 
 		s = m.section(form.NamedSection, '@hostapd[0]', 'hostapd',
@@ -189,6 +297,11 @@ return view.extend({
 		o.value('2', _('TCP with UMDNS discovery'));
 		o.value('3', _('TCP w/out UMDNS discovery'));
 		o.default = '2';
+		// Keep it in the file even when it equals the default: DAWN's init
+		// script reads it to announce DAWN via umdns, and older versions of
+		// that script failed when it was missing (so peers stopped finding
+		// each other after the settings page was saved).
+		o.rmempty = false;
 
 		o = s.option(form.Value, 'server_ip',
 			_('Server IP'),
@@ -205,6 +318,7 @@ return view.extend({
 		);
 		o.default = '1026';
 		o.placeholder = '1026';
+		o.rmempty = false; // read by the init script for the umdns announcement
 
 		// o = s.option(form.Flag, 'use_symm_enc',
 		// 	_('Use symm enc'),
@@ -388,12 +502,17 @@ return view.extend({
 		const bands = {
 			'802_11g': _('2.4G Band Metric'),
 			'802_11a': _('5G Band Metric'),
+			'802_11_6g': _('6G Band Metric'),
 		};
+		const initialScoreDefault = { '802_11g': '80', '802_11a': '100', '802_11_6g': '105' };
 
 		for (const k in bands) {
 			s = m.section(form.NamedSection, k, 'metric',
 				bands[k],
 			);
+			// Configs from older versions lack the 6G section; offer to add it
+			// instead of silently staging a change when the page loads.
+			s.addremove = (uci.get('dawn', k) == null);
 
 			o = s.option(form.Value, 'ap_weight',
 				_('Ap Weight'),
@@ -423,7 +542,8 @@ return view.extend({
 				_('Initial Score'),
 				_('Base score for AP based on operating band'),
 			);
-			o.placeholder = _('Default Value') + ': ' + k == '802_11g' ? '80' : '100';
+			// (was: _('Default Value') + ': ' + k == '802_11g' ? ... which always showed '100')
+			o.placeholder = _('Default Value') + ': ' + initialScoreDefault[k];
 
 			o = s.option(form.Value, 'low_rssi',
 				_('Low RSSI'),
@@ -489,6 +609,33 @@ return view.extend({
 				_('Score increment if VHT is supported'),
 			);
 			o.placeholder = _('Default Value') + ': ' + '5';
+		};
+
+		// Move the advanced sections into a collapsible <details>. Hooked into
+		// renderContents (not render) because LuCI re-renders the map after
+		// Save, which would otherwise undo it.
+		var advancedOpen = false;
+		m.renderContents = function() {
+			return form.Map.prototype.renderContents.apply(this, arguments).then(function(node) {
+				// node is the .cbi-map; sections are its direct children
+				var sections = Array.prototype.filter.call(node.children, function(el) {
+					return el.classList.contains('cbi-section');
+				});
+				if (sections.length <= SIMPLE_SECTIONS)
+					return node;
+
+				var details = E('details', { 'class': 'cbi-section', 'style': 'padding:0 1em' }, [
+					E('summary', { 'style': 'cursor:pointer; padding:.5em 0; font-weight:bold' }, _('Advanced settings'))
+				]);
+				details.open = advancedOpen;
+				details.addEventListener('toggle', function() { advancedOpen = details.open; });
+
+				sections[SIMPLE_SECTIONS].parentNode.insertBefore(details, sections[SIMPLE_SECTIONS]);
+				for (var j = SIMPLE_SECTIONS; j < sections.length; j++)
+					details.appendChild(sections[j]);
+
+				return node;
+			});
 		};
 
 		return m.render();

@@ -9,3 +9,4 @@ debian/dawn/
 debian/changelog
 debian/tmp/
 build-host-tests/
+__pycache__/

@@ -252,7 +252,67 @@ function evaluate(state) {
 		checks.push({ id: 'kicking', status: 'ok', title: _('Client steering is turned on') });
 	}
 
-	/* 9. Known-problem options */
+	/* 9. Peer authentication (dawn_auth) */
+	const key = cfg.auth_key || '';
+	const port = cfg.tcp_port || '1026';
+	if (!key) {
+		checks.push({
+			id: 'auth', status: 'warning',
+			title: _('Messages between access points are not authenticated'),
+			detail: (String(cfg.accept_config_push) == '1'
+				? _('Any device on your network that can reach TCP port %s can feed DAWN made-up data and change its settings on every access point.')
+				: _('Any device on your network that can reach TCP port %s can feed DAWN made-up data.')).format(port)
+				+ ' ' + _('Generate a shared key here, then enter the same key on every other access point (Network → DAWN → Peer security).'),
+			fix: { type: 'action', action: 'generateKey', label: _('Generate shared key') }
+		});
+	}
+	else if (!/^[0-9a-fA-F]{64}$/.test(key)) {
+		checks.push({
+			id: 'auth', status: 'error',
+			title: _('The shared key is not valid'),
+			detail: _('It must be exactly 64 hexadecimal characters. DAWN ignores an invalid key, so messages are not authenticated.'),
+			fix: { type: 'link', label: _('Open DAWN settings'), href: 'admin/network/dawn' }
+		});
+	}
+	else if (netopt == '0' || netopt == '1') {
+		checks.push({
+			id: 'auth', status: 'warning',
+			title: _('The shared key has no effect in broadcast / multicast mode'),
+			detail: _('Message authentication only works with TCP networking. Switch Network option to TCP with umdns discovery.'),
+			fix: { type: 'link', label: _('Open DAWN settings'), href: 'admin/network/dawn' }
+		});
+	}
+	else {
+		checks.push({
+			id: 'auth', status: 'ok',
+			title: _('Messages between access points are authenticated'),
+			detail: _('Every access point must use this same key. Messages from devices without it are ignored.'),
+			fix: { type: 'reveal', label: _('Show key'), value: key }
+		});
+	}
+
+	/* 10. What DAWN has actually done (needs get_stats) */
+	if (state.stats && state.stats.steering) {
+		const st = state.stats.steering;
+		const sent = (st.sent_rssi_compare || 0) + (st.sent_absolute_rssi || 0);
+		const moved = st.moved || 0, stayed = st.stayed || 0;
+		const peersRejected = state.stats.peers ? (state.stats.peers.messages_rejected_auth || 0) : 0;
+
+		checks.push({
+			id: 'activity',
+			status: (sent >= 3 && moved == 0 && stayed > 0) ? 'warning' : 'info',
+			title: sent
+				? _('Steering activity: %d request(s) sent, %d client(s) moved, %d stayed').format(sent, moved, stayed)
+				: _('No clients have been steered yet'),
+			detail: (sent >= 3 && moved == 0 && stayed > 0)
+				? _('Clients are receiving requests but not moving. They may not support 802.11v, or the suggested access points may be too weak from where they are.')
+				: (sent ? null : _('That is normal until a client has a clearly better access point available.')),
+			items: peersRejected ? [ _('%d message(s) from devices without the shared key were ignored').format(peersRejected) ] : null,
+			fix: { type: 'link', label: _('Open Steering'), href: 'admin/status/dawn/steering' }
+		});
+	}
+
+	/* 11. Known-problem options */
 	if (isOn(cfg.use_symm_enc)) {
 		checks.push({
 			id: 'encryption', status: 'warning',
@@ -291,9 +351,11 @@ const callUmdnsList = function() {
 	}).catch(function() { return false; });
 };
 
-/* 'band' is the current option; older configs only have hwmode */
-function detectBand(dev, net) {
-	const band = dev ? dev.get('band') : null;
+/* 'band' is the current option; older configs only have hwmode.
+ * (WifiNetwork.getWifiDevice() returns a Promise, so read the radio's UCI
+ * section directly.) */
+function detectBand(radio, net) {
+	const band = radio ? uci.get('wireless', radio, 'band') : null;
 	if (band)
 		return band;
 
@@ -301,7 +363,7 @@ function detectBand(dev, net) {
 	if (!isNaN(freq))
 		return freq < 3 ? '2g' : (freq < 5.925 ? '5g' : (freq < 10 ? '6g' : '60g'));
 
-	const hwmode = dev ? (dev.get('hwmode') || '') : '';
+	const hwmode = radio ? (uci.get('wireless', radio, 'hwmode') || '') : '';
 	if (/a$/.test(hwmode)) return '5g';
 	if (/[bg]$/.test(hwmode)) return '2g';
 	return null;
@@ -315,12 +377,12 @@ function gatherIfaces() {
 		});
 
 		return Promise.all(aps.map(function(n) {
-			const dev = n.getWifiDevice();
+			const radio = n.getWifiDeviceName();
 			const ifname = n.getIfname();
 			const iface = {
 				section: n.getName(),
 				ssid: n.getSSID(),
-				band: detectBand(dev, n),
+				band: detectBand(radio, n),
 				ifname: ifname,
 				bssid: n.getActiveBSSID ? n.getActiveBSSID() : null,
 				up: !!(ifname && n.isUp()),
@@ -362,7 +424,8 @@ return view.extend({
 			return Promise.all([
 				running ? L.resolveDefault(dawn.callDawnGetNetwork(), null) : null,
 				callUmdnsList(),
-				L.resolveDefault(gatherIfaces(), [])
+				L.resolveDefault(gatherIfaces(), []),
+				running ? L.resolveDefault(dawn.callDawnGetStats(), null) : null
 			]).then(function(r2) {
 				const local = uci.get_first('dawn', 'local') || {};
 				const net = uci.get_first('dawn', 'network') || {};
@@ -375,12 +438,15 @@ return view.extend({
 					overview: r2[0],
 					umdns: r2[1],
 					ifaces: r2[2],
+					stats: r2[3],
 					fullHostapd: L.hasSystemFeature('hostapd', 'eap'),
 					config: {
 						network_option: net.network_option,
 						server_ip: net.server_ip,
 						tcp_port: net.tcp_port,
 						use_symm_enc: net.use_symm_enc,
+						auth_key: net.auth_key,
+						accept_config_push: net.accept_config_push,
 						loglevel: local.loglevel,
 						kicking: metric.kicking,
 						steering_ssid: Array.isArray(steering) ? steering : (steering ? [ steering ] : [])
@@ -416,6 +482,20 @@ return view.extend({
 		return this.applyChanges();
 	},
 
+	generateKey: function() {
+		const sid = uci.get_first('dawn', 'network');
+		const bytes = new Uint8Array(32);
+		window.crypto.getRandomValues(bytes);
+		const key = Array.prototype.map.call(bytes, function(b) { return ('0' + b.toString(16)).slice(-2); }).join('');
+
+		if (sid)
+			uci.set('dawn', sid['.name'], 'auth_key', key);
+		else
+			uci.set('dawn', uci.add('dawn', 'network'), 'auth_key', key);
+
+		return this.applyChanges();
+	},
+
 	quietLogging: function() {
 		const sid = uci.get_first('dawn', 'local');
 		if (sid)
@@ -428,6 +508,14 @@ return view.extend({
 	renderFix: function(fix) {
 		if (!fix)
 			return '';
+
+		if (fix.type == 'reveal') {
+			const btn = E('button', { 'class': 'btn cbi-button' }, fix.label);
+			btn.addEventListener('click', function() {
+				btn.parentNode.replaceChild(E('code', { 'style': 'word-break:break-all; user-select:all' }, fix.value), btn);
+			});
+			return btn;
+		}
 
 		if (fix.type == 'link') {
 			const parts = fix.href.split('?');
@@ -445,7 +533,7 @@ return view.extend({
 
 	renderCheck: function(c) {
 		const badge = {
-			error: [ 'danger', _('Problem') ],
+			error: [ 'important', _('Problem') ],
 			warning: [ 'warning', _('Warning') ],
 			info: [ 'notice', _('Note') ],
 			ok: [ 'success', _('OK') ]
@@ -453,7 +541,11 @@ return view.extend({
 
 		return E('tr', { 'class': 'tr', 'data-check': c.id, 'data-status': c.status }, [
 			E('td', { 'class': 'td', 'style': 'width:1%; vertical-align:top; white-space:nowrap' },
-				E('span', { 'class': 'label ' + badge[0] }, badge[1])),
+				E('span', {
+					'class': 'label ' + badge[0],
+					// Themes have no red label class; use the error colour where defined
+					'style': c.status == 'error' ? 'background-color:var(--error-color-high, #c9302c); color:#fff' : null
+				}, badge[1])),
 			/* Fix button sits under the explanation so the text keeps its width on phones */
 			E('td', { 'class': 'td' }, [
 				E('strong', {}, c.title),

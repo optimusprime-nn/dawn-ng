@@ -1,0 +1,40 @@
+name: LuCI tests
+
+# Loads luci-app-dawn's pages with the real LuCI JavaScript runtime in
+# Chromium against a mock router (tools/luci-test) and checks what they show
+# and which UCI changes they make.
+
+on:
+  push:
+    paths: [ 'openwrt/luci-app-dawn/**', 'tools/luci-test/**', 'dawn-config', '.github/workflows/luci-tests.yml' ]
+  pull_request:
+    paths: [ 'openwrt/luci-app-dawn/**', 'tools/luci-test/**', 'dawn-config', '.github/workflows/luci-tests.yml' ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  luci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch LuCI runtime (luci-base + bootstrap theme)
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/openwrt/luci.git "$RUNNER_TEMP/luci"
+          git -C "$RUNNER_TEMP/luci" sparse-checkout set modules/luci-base/htdocs themes/luci-theme-bootstrap/htdocs
+
+      - name: Install Playwright
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Run tests
+        run: python tools/luci-test/run.py --luci "$RUNNER_TEMP/luci" --shots "$RUNNER_TEMP/shots"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: luci-screenshots
+          path: ${{ runner.temp }}/shots/

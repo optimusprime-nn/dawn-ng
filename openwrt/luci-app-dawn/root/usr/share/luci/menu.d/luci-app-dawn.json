@@ -28,9 +28,18 @@
 		}
 	},
 
+	"admin/status/dawn/steering": {
+		"title": "Steering",
+		"order": 3,
+		"action": {
+			"type": "view",
+			"path": "status/dawn/steering"
+		}
+	},
+
 	"admin/status/dawn/setup_check": {
 		"title": "Setup Check",
-		"order": 3,
+		"order": 4,
 		"action": {
 			"type": "view",
 			"path": "status/dawn/setup_check"
