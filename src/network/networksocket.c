@@ -120,7 +120,7 @@ static void* receive_msg_inner(void* args, bool is_enc) {
         }
 
         dawnlog_debug("Received network message: %s\n", final_msg);
-        handle_network_msg(final_msg);
+        handle_network_msg(final_msg, false); // UDP modes do not support dawn_auth
 
         if (is_enc)
         {

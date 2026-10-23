@@ -7,6 +7,7 @@
 #include "crypto.h"
 #include "datastorage.h"
 #include "tcpsocket.h"
+#include "dawn_auth.h"
 
 #define STR_EVAL(x) #x
 #define STR_QUOTE(x) STR_EVAL(x)
@@ -118,6 +119,25 @@ static void client_to_server_state(struct ustream *s) {
     tcp_con_close(con);
 }
 
+// A peer without (or with the wrong) auth_key retries every update_tcp_con
+// seconds, so log rejections at most once a minute.
+static void auth_failure_log(const struct sockaddr_in *from, const char *reason) {
+    static time_t last_log = 0;
+    static unsigned suppressed = 0;
+    time_t now = time(0);
+
+    if (now - last_log < 60 && now >= last_log) {
+        suppressed++;
+        return;
+    }
+
+    dawnlog_warning("tcp_socket: dropping message from %s: %s%s\n", inet_ntoa(from->sin_addr),
+            reason ? reason : "authentication failed",
+            suppressed ? " (similar messages suppressed)" : "");
+    last_log = now;
+    suppressed = 0;
+}
+
 static void client_read_cb(struct ustream *s, int bytes) {
     struct client *cl = container_of(s, struct client, s.stream);
 
@@ -223,22 +243,40 @@ static void client_read_cb(struct ustream *s, int bytes) {
                 goto process_done;
             }
 
+            char *body = cl->str + HEADER_SIZE;
+            size_t body_len = cl->final_len - HEADER_SIZE;
+            bool authenticated = false;
+
+            if (dawn_auth_enabled()) {
+                const char *reason = NULL;
+                size_t payload_len = 0;
+                const char *payload = dawn_auth_unwrap(body, body_len, time(0), &payload_len, &reason);
+
+                if (!payload) {
+                    auth_failure_log(&cl->sin, reason);
+                    goto process_done;
+                }
+
+                body = (char *)payload;
+                body_len = payload_len;
+                authenticated = true;
+            }
+
             if (network_config.use_symm_enc) {
-                char *dec = gcrypt_decrypt_msg(cl->str + HEADER_SIZE, cl->final_len - HEADER_SIZE);//len of str is final_len
+                char *dec = gcrypt_decrypt_msg(body, body_len);
                 if (!dec) {
                     // Bad ciphertext length, cipher error or OOM. Drop just this
                     // message; the framing is intact so the stream can continue.
-                    // (Previously this freed cl->str but left state COMPLETE, so
-                    // the next read callback dereferenced NULL.)
                     dawnlog_error("tcp_socket: failed to decrypt message from %s, dropping\n",
                             inet_ntoa(cl->sin.sin_addr));
                     goto process_done;
                 }
-                handle_network_msg(dec);
+                handle_network_msg(dec, authenticated);
                 dawn_free(dec);
                 dec = NULL;
             } else {
-                handle_network_msg(cl->str + HEADER_SIZE);//len of str is final_len
+                // NUL-terminated: cl->str[final_len] was set when the frame completed
+                handle_network_msg(body, authenticated);
             }
 
 process_done:
@@ -434,78 +472,73 @@ void send_tcp(char *msg) {
     if (dawnlog_showing(DAWNLOG_DEBUG))
         print_tcp_array();
 
-    struct network_con_s *con, *tmp;
+    // Build the payload: the JSON (with its NUL), optionally encrypted, then
+    // optionally authenticated. Finally prefix the length and send to all peers.
+    char *payload = msg;
+    size_t payload_len = strlen(msg) + 1;
+    char *enc = NULL, *auth = NULL, *final_str = NULL;
+
     if (network_config.use_symm_enc) {
-        int length_enc;
-        size_t msglen = strlen(msg)+1;
-        char *enc = gcrypt_encrypt_msg(msg, msglen, &length_enc);
-        if (!enc){
+        int length_enc = 0;
+        enc = gcrypt_encrypt_msg(msg, payload_len, &length_enc);
+        if (!enc) {
             dawnlog_error("Ustream error: not enough memory (" STR_QUOTE(__LINE__) ")\n");
             return;
         }
-
-        uint32_t final_len = length_enc + sizeof(final_len);
-        char *final_str = dawn_malloc(final_len);
-        if (!final_str){
-            dawn_free(enc);
-            enc = NULL;
-            dawnlog_error("Ustream error: not enough memory (" STR_QUOTE(__LINE__) ")\n");
-            return;
-        }
-        uint32_t *msg_header = (uint32_t *)final_str;
-        *msg_header = htonl(final_len);
-        memcpy(final_str+sizeof(final_len), enc, length_enc);
-        list_for_each_entry_safe(con, tmp, &tcp_sock_list, list)
-        {
-            if (con->connected) {
-                int len_ustream = ustream_write(&con->stream.stream, final_str, final_len, 0);
-                dawnlog_debug("Ustream send: %d\n", len_ustream);
-                if (len_ustream <= 0) {
-                    dawnlog_error("Ustream error(" STR_QUOTE(__LINE__) ")!\n");
-                    //ERROR HANDLING!
-                    if (con->stream.stream.write_error) {
-                        tcp_con_close(con);
-                        con = NULL;
-                    }
-                }
-            }
-
-        }
-
-        dawn_free(final_str);
-        final_str = NULL;
-        dawn_free(enc);
-        enc = NULL;
-    } else {
-        size_t msglen = strlen(msg) + 1;
-        uint32_t final_len = msglen + sizeof(final_len);
-        char *final_str = dawn_malloc(final_len);
-        if (!final_str){
-            dawnlog_error("Ustream error: not enough memory (" STR_QUOTE(__LINE__) ")\n");
-            return;
-        }
-        uint32_t *msg_header = (uint32_t *)final_str;
-        *msg_header = htonl(final_len);
-        memcpy(final_str+sizeof(final_len), msg, msglen);
-
-        list_for_each_entry_safe(con, tmp, &tcp_sock_list, list)
-        {
-            if (con->connected) {
-                int len_ustream = ustream_write(&con->stream.stream, final_str, final_len, 0);
-                dawnlog_debug("Ustream send: %d\n", len_ustream);
-                if (len_ustream <= 0) {
-                    //ERROR HANDLING!
-                    dawnlog_error("Ustream error(" STR_QUOTE(__LINE__) ")!\n");
-                    if (con->stream.stream.write_error) {
-                        tcp_con_close(con);
-                        con = NULL;
-                    }
-                }
-            }
-        }
-        dawn_free(final_str);
-        final_str = NULL;
+        payload = enc;
+        payload_len = (size_t)length_enc;
     }
+
+    if (dawn_auth_enabled()) {
+        size_t auth_len = 0;
+        auth = dawn_auth_wrap(payload, payload_len, time(0), &auth_len);
+        if (!auth) {
+            dawnlog_error("send_tcp: failed to authenticate message, not sending\n");
+            goto out;
+        }
+        payload = auth;
+        payload_len = auth_len;
+    }
+
+    if (payload_len > MAX_TCP_MSG_LEN - HEADER_SIZE) {
+        dawnlog_error("send_tcp: message too large (%zu bytes), not sending\n", payload_len);
+        goto out;
+    }
+
+    uint32_t final_len = (uint32_t)(payload_len + HEADER_SIZE);
+    final_str = dawn_malloc(final_len);
+    if (!final_str) {
+        dawnlog_error("Ustream error: not enough memory (" STR_QUOTE(__LINE__) ")\n");
+        goto out;
+    }
+
+    uint32_t msg_header = htonl(final_len);
+    memcpy(final_str, &msg_header, HEADER_SIZE);
+    memcpy(final_str + HEADER_SIZE, payload, payload_len);
+
+    struct network_con_s *con, *tmp;
+    list_for_each_entry_safe(con, tmp, &tcp_sock_list, list)
+    {
+        if (con->connected) {
+            int len_ustream = ustream_write(&con->stream.stream, final_str, final_len, 0);
+            dawnlog_debug("Ustream send: %d\n", len_ustream);
+            if (len_ustream <= 0) {
+                dawnlog_error("Ustream error(" STR_QUOTE(__LINE__) ")!\n");
+                if (con->stream.stream.write_error) {
+                    tcp_con_close(con);
+                    con = NULL;
+                }
+            }
+        }
+    }
+
+out:
+    if (final_str)
+        dawn_free(final_str);
+    if (auth)
+        dawn_free(auth);
+    if (enc)
+        dawn_free(enc);
 }
 
 void server_to_clients_ping(void)

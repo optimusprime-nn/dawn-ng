@@ -42,6 +42,9 @@ int main(int argc, char **argv) {
     ssize_t n;
     int count = 0;
 
+    // Exercise the config parser too (pushes are otherwise ignored by policy)
+    network_config.accept_config_push = ACCEPT_CONFIG_PUSH_ANY;
+
     if (argc > 1 && !(f = fopen(argv[1], "r"))) {
         perror(argv[1]);
         return 1;
@@ -54,7 +57,7 @@ int main(int argc, char **argv) {
             continue;
 
         printf("MSG %d: %.100s%s\n", ++count, line, n > 100 ? "..." : "");
-        handle_network_msg(line);
+        handle_network_msg(line, true);
     }
 
     free(line);

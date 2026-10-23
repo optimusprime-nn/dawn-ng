@@ -1,6 +1,7 @@
 #include <dirent.h>
 #include <libubus.h>
 
+#include "dawn_auth.h"
 #include "memory_utils.h"
 #include "networksocket.h"
 #include "tcpsocket.h"
@@ -231,6 +232,29 @@ void ubus_set_nr();
 static int build_hearing_map_sort_client(struct blob_buf* b);
 
 /*** CODE START ***/
+void apply_peer_auth_config(const struct network_config_s *cfg) {
+    snprintf(network_config.auth_key, sizeof(network_config.auth_key), "%s", cfg->auth_key);
+    network_config.accept_config_push = cfg->accept_config_push;
+
+    switch (dawn_auth_set_key(cfg->auth_key)) {
+    case DAWN_AUTH_KEY_SET:
+        if (network_config.network_option == 2 || network_config.network_option == 3)
+            dawnlog_always("Peer messages are authenticated (auth_key set)\n");
+        else
+            dawnlog_warning("auth_key is only supported with TCP networking (network_option 2 or 3); "
+                    "UDP messages are NOT authenticated\n");
+        break;
+    case DAWN_AUTH_KEY_INVALID:
+        dawnlog_error("auth_key must be %d hex characters; peer authentication is OFF\n", DAWN_AUTH_KEY_HEX_LEN);
+        break;
+    case DAWN_AUTH_KEY_NONE:
+    default:
+        dawnlog_warning("No auth_key set: any device that can reach the DAWN port can inject data%s\n",
+                cfg->accept_config_push == ACCEPT_CONFIG_PUSH_ANY ? " and rewrite this AP's DAWN configuration" : "");
+        break;
+    }
+}
+
 void add_client_update_timer(time_t time) {
     uloop_timeout_set(&client_timer, time);
 }
@@ -1559,6 +1583,10 @@ static int reload_config(struct ubus_context *ctx_local, struct ubus_object *obj
     dawn_metric = uci_get_dawn_metric();
     timeout_config = uci_get_time_config();
     uci_get_dawn_hostapd_dir();
+
+    // Sockets can't be changed without a restart, but the key and push policy can
+    struct network_config_s net_config = uci_get_dawn_network();
+    apply_peer_auth_config(&net_config);
 
     if(timeout_config.update_beacon_reports) // allow setting timeout to 0
         uloop_timeout_add(&beacon_reports_timer); // callback = update_beacon_reports

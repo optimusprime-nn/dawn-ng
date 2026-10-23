@@ -23,6 +23,8 @@ are skipped by default, because DAWN commits them to /etc/config/dawn;
 use --include-config-push to send them anyway (back up the config first).
 """
 import argparse
+import hashlib
+import hmac
 import json
 import os
 import socket
@@ -33,10 +35,14 @@ import time
 DEFAULT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src", "test", "malformed_msgs.txt")
 
 
-def frame(payload: bytes) -> bytes:
+def frame(payload: bytes, auth_key: bytes = None) -> bytes:
     # DAWN framing: 4 byte big-endian length (including the header itself),
     # then the JSON message including its terminating NUL.
     body = payload + b"\0"
+    if auth_key:
+        # dawn_auth: "DWA1" | 8 byte big-endian time | HMAC-SHA256(magic|time|body) | body
+        head = b"DWA1" + struct.pack("!Q", int(time.time()))
+        body = head + hmac.new(auth_key, head + body, hashlib.sha256).digest() + body
     return struct.pack("!I", len(body) + 4) + body
 
 
@@ -98,11 +104,23 @@ def main():
     ap.add_argument("--port", type=int, default=1026, help="DAWN tcp_port (default 1026)")
     ap.add_argument("--file", default=DEFAULT_FILE, help="messages, one JSON per line ('#' lines are labels)")
     ap.add_argument("--wait", type=float, default=1.0, help="seconds to watch each connection (default 1)")
+    ap.add_argument("--auth-key", metavar="HEX",
+                    help="sign messages with this auth_key (64 hex chars), as a trusted peer would. "
+                         "Without it, a DAWN that has auth_key set should ignore every message")
     ap.add_argument("--include-config-push", action="store_true",
                     help="also send config-push messages (these CHANGE /etc/config/dawn on the router)")
     ap.add_argument("--bad-frames", action="store_true",
                     help="also send malformed TCP frames (zero / huge / short length headers)")
     args = ap.parse_args()
+
+    key = None
+    if args.auth_key:
+        try:
+            key = bytes.fromhex(args.auth_key)
+        except ValueError:
+            key = b""
+        if len(key) != 32:
+            ap.error("--auth-key must be 64 hex characters")
 
     if not alive(args.host, args.port, 3):
         print(f"Cannot connect to DAWN at {args.host}:{args.port}. Is it running with TCP networking?")
@@ -119,7 +137,7 @@ def main():
             print(f"[SKIP]     {label}: config push (use --include-config-push)")
             skipped += 1
             continue
-        tests.append((label, frame(msg)))
+        tests.append((label, frame(msg, key)))
     if args.bad_frames:
         # Expected outcome for these: DAWN drops the connection but keeps running.
         tests += [

@@ -68,6 +68,12 @@ void uloop_add_data_cbs();
 
 int uci_send_via_network();
 
+/**
+ * Apply the peer authentication settings (auth_key, accept_config_push) from
+ * cfg to the running instance and log the resulting state.
+ */
+void apply_peer_auth_config(const struct network_config_s *cfg);
+
 int build_network_overview(struct blob_buf* b);
 
 int ap_get_nr(struct blob_buf* b, struct dawn_mac own_bssid_addr, const char *ssid);

@@ -34,6 +34,9 @@ SET(SOURCES
         crypto/crypto.c
         include/crypto.h
 
+        crypto/dawn_auth.c
+        include/dawn_auth.h
+
         include/utils.h
         utils/utils.c
 
@@ -103,7 +106,21 @@ SET(LIBS
 ADD_EXECUTABLE(dawn ${SOURCES})
 ADD_EXECUTABLE(test_storage ${SOURCES_TEST_STORAGE})
 ADD_EXECUTABLE(test_header ${SOURCES_TEST_HEADER})
+SET(SOURCES_TEST_AUTH
+        test/test_auth.c
+
+        crypto/dawn_auth.c
+        include/dawn_auth.h
+
+        utils/utils.c
+        include/utils.h
+
+        utils/memory_utils.c
+        include/memory_utils.h)
+
 ADD_EXECUTABLE(test_msghandler ${SOURCES_TEST_MSGHANDLER})
+ADD_EXECUTABLE(test_auth ${SOURCES_TEST_AUTH})
+TARGET_LINK_LIBRARIES(test_auth gcrypt)
 TARGET_LINK_LIBRARIES(test_msghandler ubox blobmsg_json json-c pthread)
 
 TARGET_LINK_LIBRARIES(dawn ${LIBS})
