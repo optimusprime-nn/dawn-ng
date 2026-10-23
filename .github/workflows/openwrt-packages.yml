@@ -2,8 +2,10 @@ name: OpenWrt packages
 
 # Builds installable dawn + luci-app-dawn packages with the official OpenWrt
 # SDK. 24.10 produces .ipk (opkg), 25.12 produces .apk (apk).
-# Every run uploads them as workflow artifacts; pushing a tag like v1 also
-# publishes them as a GitHub release.
+# Each artifact is a complete package feed (packages + index). If the
+# repository secrets USIGN_KEY (24.10) / APK_KEY (25.12) are set, the index is
+# signed, and routers holding the public keys in keys/ install from it without
+# --allow-untrusted. Pushing a tag like v1 also publishes a GitHub release.
 
 on:
   push:
@@ -44,6 +46,10 @@ jobs:
           ARCH: ${{ matrix.arch }}-openwrt-${{ matrix.release }}
           FEEDNAME: dawn_dev
           PACKAGES: dawn luci-app-dawn
+          INDEX: 1
+          # Empty when the secret is not set: the feed is then unsigned
+          KEY_BUILD: ${{ matrix.release == '24.10' && secrets.USIGN_KEY || '' }}
+          PRIVATE_KEY: ${{ matrix.release != '24.10' && secrets.APK_KEY || '' }}
           V: s
 
       - name: Collect packages
@@ -51,8 +57,10 @@ jobs:
         run: |
           OUT="$RUNNER_TEMP/out"
           mkdir -p "$OUT"
-          find bin/packages/${{ matrix.arch }}/dawn_dev -type f \( -name '*.ipk' -o -name '*.apk' \) -exec cp -v {} "$OUT"/ \;
-          test -n "$(ls "$OUT")" || { echo "No packages were produced"; ls -R bin/packages || true; exit 1; }
+          FEED=bin/packages/${{ matrix.arch }}/dawn_dev
+          # The whole feed: packages plus index (Packages[.gz|.sig] or packages.adb)
+          cp -v "$FEED"/* "$OUT"/
+          ls "$OUT" | grep -qE '\.(ipk|apk)$' || { echo "No packages were produced"; ls -R bin/packages || true; exit 1; }
           ls -la "$OUT"
 
       - uses: actions/upload-artifact@v4
