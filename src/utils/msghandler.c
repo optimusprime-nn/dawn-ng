@@ -137,6 +137,9 @@ int parse_to_hostapd_notify(struct blob_attr* msg, hostapd_notify_entry* notify_
 
     blobmsg_parse(hostapd_notify_policy, __HOSTAPD_NOTIFY_MAX, tb, blob_data(msg), blob_len(msg));
 
+    if (!tb[HOSTAPD_NOTIFY_BSSID_ADDR] || !tb[HOSTAPD_NOTIFY_CLIENT_ADDR])
+        return UBUS_STATUS_INVALID_ARGUMENT;
+
     if (hwaddr_aton(blobmsg_data(tb[HOSTAPD_NOTIFY_BSSID_ADDR]), notify_req->bssid_addr.u8))
         return UBUS_STATUS_INVALID_ARGUMENT;
 
@@ -151,7 +154,8 @@ probe_entry *parse_to_probe_req(struct blob_attr* msg) {
 
     dawnlog_debug_func("Entering...");
 
-    probe_entry* prob_req = dawn_malloc(sizeof(probe_entry));
+    // Zeroed so that fields not carried in the message are not left as heap garbage
+    probe_entry* prob_req = dawn_calloc(1, sizeof(probe_entry));
     if (prob_req == NULL)
     {
         dawnlog_error("dawn_malloc of probe_entry failed!\n");
@@ -159,6 +163,13 @@ probe_entry *parse_to_probe_req(struct blob_attr* msg) {
     }
 
     blobmsg_parse(prob_policy, __PROB_MAX, tb, blob_data(msg), blob_len(msg));
+
+    if (!tb[PROB_BSSID_ADDR] || !tb[PROB_CLIENT_ADDR] || !tb[PROB_TARGET_ADDR])
+    {
+        dawn_free(prob_req);
+        prob_req = NULL;
+        return NULL;
+    }
 
     if (hwaddr_aton(blobmsg_data(tb[PROB_BSSID_ADDR]), prob_req->bssid_addr.u8))
     {
@@ -232,7 +243,10 @@ int handle_deauth_req(struct blob_attr* msg) {
     dawnlog_debug_func("Entering...");
 
     hostapd_notify_entry notify_req;
-    parse_to_hostapd_notify(msg, &notify_req);
+    if (parse_to_hostapd_notify(msg, &notify_req)) {
+        dawnlog_warning("Ignoring malformed deauth message\n");
+        return -1;
+    }
 
     dawn_mutex_lock(&client_array_mutex);
 
@@ -250,7 +264,10 @@ static int handle_set_probe(struct blob_attr* msg) {
     dawnlog_debug_func("Entering...");
 
     hostapd_notify_entry notify_req;
-    parse_to_hostapd_notify(msg, &notify_req);
+    if (parse_to_hostapd_notify(msg, &notify_req)) {
+        dawnlog_warning("Ignoring malformed setprobe message\n");
+        return -1;
+    }
 
     probe_array_set_all_probe_count(notify_req.client_addr, dawn_metric.min_probe_count);
 
@@ -377,7 +394,8 @@ dump_client(struct blob_attr** tb, struct dawn_mac client_addr, const char* bssi
     uint8_t vht_supported) {
     dawnlog_debug_func("Entering...");
 
-    client *client_entry = dawn_malloc(sizeof(struct client_s));
+    // Zeroed: most fields below are optional and were previously left uninitialised
+    client *client_entry = dawn_calloc(1, sizeof(struct client_s));
     if (client_entry == NULL)
     {
         // MUSTDO: Error handling?
@@ -436,7 +454,7 @@ dump_client(struct blob_attr** tb, struct dawn_mac client_addr, const char* bssi
 
     // copy signature
     if (tb[CLIENT_SIGNATURE]) {
-        strncpy(client_entry->signature, blobmsg_data(tb[CLIENT_SIGNATURE]), SIGNATURE_LEN * sizeof(char));
+        snprintf(client_entry->signature, sizeof(client_entry->signature), "%s", blobmsg_get_string(tb[CLIENT_SIGNATURE]));
     }
     else
     {
@@ -467,6 +485,10 @@ dump_client_table(struct blob_attr* head, int len, const char* bssid_addr, uint3
     __blob_for_each_attr(attr, head, len)
     {
         hdr = blob_data(attr);
+
+        // Each station must be a table keyed by its MAC address
+        if (blob_id(attr) != BLOBMSG_TYPE_TABLE)
+            continue;
 
         struct blob_attr* tb[__CLIENT_MAX];
         blobmsg_parse(client_policy, __CLIENT_MAX, tb, blobmsg_data(attr), blobmsg_len(attr));
@@ -499,14 +521,29 @@ int parse_to_clients(struct blob_attr* msg) {
 
     // Get clients
     if (tb[CLIENT_TABLE] && tb[CLIENT_TABLE_BSSID] && tb[CLIENT_TABLE_FREQ]) {
+        struct dawn_mac bssid;
+        if (hwaddr_aton(blobmsg_get_string(tb[CLIENT_TABLE_BSSID]), bssid.u8)) {
+            dawnlog_warning("Ignoring clients message with invalid BSSID\n");
+            return -1;
+        }
+
+        // ht / vht are optional; previously a missing one was a NULL dereference
+        uint8_t ht = tb[CLIENT_TABLE_HT] ? blobmsg_get_u8(tb[CLIENT_TABLE_HT]) : 0;
+        uint8_t vht = tb[CLIENT_TABLE_VHT] ? blobmsg_get_u8(tb[CLIENT_TABLE_VHT]) : 0;
+
         int num_stations = 0;
         num_stations = dump_client_table(blobmsg_data(tb[CLIENT_TABLE]), blobmsg_data_len(tb[CLIENT_TABLE]),
             blobmsg_data(tb[CLIENT_TABLE_BSSID]), blobmsg_get_u32(tb[CLIENT_TABLE_FREQ]),
-            blobmsg_get_u8(tb[CLIENT_TABLE_HT]), blobmsg_get_u8(tb[CLIENT_TABLE_VHT]));
+            ht, vht);
 
         // Get AP
-        ap *ap_entry = dawn_malloc(sizeof(struct ap_s));
-        hwaddr_aton(blobmsg_data(tb[CLIENT_TABLE_BSSID]), ap_entry->bssid_addr.u8);
+        // Zeroed: ssid in particular is used as a sort key, and is optional in the message
+        ap *ap_entry = dawn_calloc(1, sizeof(struct ap_s));
+        if (!ap_entry) {
+            dawnlog_error("dawn_calloc of ap entry failed!\n");
+            return -1;
+        }
+        ap_entry->bssid_addr = bssid;
         ap_entry->freq = blobmsg_get_u32(tb[CLIENT_TABLE_FREQ]);
 
         if (tb[CLIENT_TABLE_HT]) {
@@ -533,7 +570,8 @@ int parse_to_clients(struct blob_attr* msg) {
         }
 
         if (tb[CLIENT_TABLE_SSID]) {
-            strcpy((char*)ap_entry->ssid, blobmsg_get_string(tb[CLIENT_TABLE_SSID]));
+            // Peer-supplied: was an unbounded strcpy() into a 33 byte field
+            snprintf((char*)ap_entry->ssid, sizeof(ap_entry->ssid), "%s", blobmsg_get_string(tb[CLIENT_TABLE_SSID]));
         }
 #if 0 // Pending deletion if no longer required
         if (tb[CLIENT_TABLE_COL_DOMAIN]) {
@@ -578,14 +616,14 @@ int parse_to_clients(struct blob_attr* msg) {
         }
 
         if (tb[CLIENT_TABLE_IFACE]) {
-            strncpy(ap_entry->iface, blobmsg_get_string(tb[CLIENT_TABLE_IFACE]), MAX_INTERFACE_NAME);
+            snprintf(ap_entry->iface, sizeof(ap_entry->iface), "%s", blobmsg_get_string(tb[CLIENT_TABLE_IFACE]));
         }
         else {
             ap_entry->iface[0] = '\0';
         }
 
         if (tb[CLIENT_TABLE_HOSTNAME]) {
-            strncpy(ap_entry->hostname, blobmsg_get_string(tb[CLIENT_TABLE_HOSTNAME]), HOST_NAME_MAX);
+            snprintf(ap_entry->hostname, sizeof(ap_entry->hostname), "%s", blobmsg_get_string(tb[CLIENT_TABLE_HOSTNAME]));
         }
         else {
             ap_entry->hostname[0] = '\0';
@@ -717,20 +755,38 @@ static const struct blobmsg_policy uci_times_policy[__UCI_TIMES_MAX] = {
         [UCI_CON_TIMEOUT] = {.name = "con_timeout", .type = BLOBMSG_TYPE_INT32},
 };
 
-static void set_uci_item(char* m, struct blob_attr* a)
+// Large enough for "dawn.<section>.<option>=<value>" with any sane names; the
+// value of rrm_mode is the only free-form string and is bounded separately.
+#define UCI_CMD_LEN 256
+
+// Write one numeric option received from a peer. Missing (or wrongly typed,
+// which blobmsg_parse() also reports as missing) options are skipped so the
+// local value is kept, rather than dereferencing NULL.
+static void set_uci_u32(const char* section, const char* option, struct blob_attr* a)
 {
-    // TODO: Magic number?
-    char cmd_buffer[1024];
+    char cmd_buffer[UCI_CMD_LEN];
 
     if (!a)
     {
-        dawnlog_trace("%s had NULL source!", m);
+        dawnlog_trace("dawn.%s.%s missing from network config, keeping local value\n", section, option);
+        return;
     }
-    else
+
+    if (snprintf(cmd_buffer, sizeof(cmd_buffer), "dawn.%s.%s=%d", section, option, (int)blobmsg_get_u32(a)) >= (int)sizeof(cmd_buffer))
     {
-        sprintf(cmd_buffer, m, blobmsg_get_u32(a));
-        uci_set_network(cmd_buffer);
+        dawnlog_warning("Ignoring over-long network config option dawn.%s.%s\n", section, option);
+        return;
     }
+
+    uci_set_network(cmd_buffer);
+}
+
+static void set_uci_section(const char* section, const char* type)
+{
+    char cmd_buffer[UCI_CMD_LEN];
+
+    if (snprintf(cmd_buffer, sizeof(cmd_buffer), "dawn.%s=%s", section, type) < (int)sizeof(cmd_buffer))
+        uci_set_network(cmd_buffer);
 }
 
 static int handle_uci_config(struct blob_attr* msg) {
@@ -740,164 +796,114 @@ static int handle_uci_config(struct blob_attr* msg) {
     struct blob_attr* tb[__UCI_TABLE_MAX];
     blobmsg_parse(uci_table_policy, __UCI_TABLE_MAX, tb, blob_data(msg), blob_len(msg));
 
-    const char *version_string = blobmsg_get_string(tb[UCI_CONFIG_VERSION]);
+    const char *version_string = tb[UCI_CONFIG_VERSION] ? blobmsg_get_string(tb[UCI_CONFIG_VERSION]) : NULL;
     if (version_string == NULL || strcmp(version_string, DAWN_CONFIG_VERSION)) {
         dawnlog_warning("Ignoring network config message with incompatible version string '%s'.\n",
                 version_string ? : "");
         return -1;
     }
 
+    if (!tb[UCI_TABLE_METRIC] || !tb[UCI_TABLE_TIMES]) {
+        dawnlog_warning("Ignoring network config message without metric / times tables.\n");
+        return -1;
+    }
+
     struct blob_attr* tb_metric[__UCI_METRIC_MAX];
     blobmsg_parse(uci_metric_policy, __UCI_METRIC_MAX, tb_metric, blobmsg_data(tb[UCI_TABLE_METRIC]), blobmsg_len(tb[UCI_TABLE_METRIC]));
 
-    // TODO: Magic number?
-    char cmd_buffer[1024];
+    set_uci_section("global", "metric");
+    set_uci_u32("global", "min_probe_count", tb_metric[UCI_MIN_PROBE_COUNT]);
+    set_uci_u32("global", "bandwidth_threshold", tb_metric[UCI_BANDWIDTH_THRESHOLD]);
+    set_uci_u32("global", "use_station_count", tb_metric[UCI_USE_STATION_COUNT]);
+    set_uci_u32("global", "max_station_diff", tb_metric[UCI_MAX_STATION_DIFF]);
+    set_uci_u32("global", "eval_probe_req", tb_metric[UCI_EVAL_PROBE_REQ]);
+    set_uci_u32("global", "eval_auth_req", tb_metric[UCI_EVAL_AUTH_REQ]);
+    set_uci_u32("global", "eval_assoc_req", tb_metric[UCI_EVAL_ASSOC_REQ]);
+    set_uci_u32("global", "kicking", tb_metric[UCI_KICKING]);
+    set_uci_u32("global", "kicking_threshold", tb_metric[UCI_KICKING_THRESHOLD]);
+    set_uci_u32("global", "deny_auth_reason", tb_metric[UCI_DENY_AUTH_REASON]);
+    set_uci_u32("global", "deny_assoc_reason", tb_metric[UCI_DENY_ASSOC_REASON]);
+    set_uci_u32("global", "min_number_to_kick", tb_metric[UCI_MIN_NUMBER_TO_KICK]);
+    set_uci_u32("global", "chan_util_avg_period", tb_metric[UCI_CHAN_UTIL_AVG_PERIOD]);
+    set_uci_u32("global", "set_hostapd_nr", tb_metric[UCI_SET_HOSTAPD_NR]);
+    set_uci_u32("global", "duration", tb_metric[UCI_DURATION]);
 
-    sprintf(cmd_buffer, "%s", "dawn.global=metric");
-    uci_set_network(cmd_buffer);
+    if (tb_metric[UCI_RRM_MODE]) {
+        char cmd_buffer[UCI_CMD_LEN];
+        const char *rrm_mode = blobmsg_get_string(tb_metric[UCI_RRM_MODE]);
 
-    sprintf(cmd_buffer, "dawn.global.min_probe_count=%d", blobmsg_get_u32(tb_metric[UCI_MIN_PROBE_COUNT]));
-    uci_set_network(cmd_buffer);
+        // A peer-supplied string used to be sprintf()'d into a fixed stack buffer
+        if (snprintf(cmd_buffer, sizeof(cmd_buffer), "dawn.global.rrm_mode=%s", rrm_mode) < (int)sizeof(cmd_buffer))
+            uci_set_network(cmd_buffer);
+        else
+            dawnlog_warning("Ignoring over-long rrm_mode from network config\n");
+    }
 
-    sprintf(cmd_buffer, "dawn.global.bandwidth_threshold=%d", blobmsg_get_u32(tb_metric[UCI_BANDWIDTH_THRESHOLD]));
-    uci_set_network(cmd_buffer);
+    if (tb_metric[UCI_BAND_METRICS]) {
+        struct blob_attr *tb_band_metric[__UCI_BAND_METRIC_MAX], *attr;
+        int band_len = blobmsg_len(tb_metric[UCI_BAND_METRICS]);
+        struct blob_attr *band_data = blobmsg_data(tb_metric[UCI_BAND_METRICS]);
+        __blob_for_each_attr(attr, band_data, band_len) {
+            struct blobmsg_hdr *hdr = blob_data(attr);
+            const char *band_name = (const char *)hdr->name;
+            int band;
 
-    sprintf(cmd_buffer, "dawn.global.use_station_count=%d", blobmsg_get_u32(tb_metric[UCI_USE_STATION_COUNT]));
-    uci_set_network(cmd_buffer);
+            if (blob_id(attr) != BLOBMSG_TYPE_TABLE)
+                continue;
 
-    sprintf(cmd_buffer, "dawn.global.max_station_diff=%d", blobmsg_get_u32(tb_metric[UCI_MAX_STATION_DIFF]));
-    uci_set_network(cmd_buffer);
+            blobmsg_parse(uci_band_metric_policy, __UCI_BAND_METRIC_MAX, tb_band_metric,
+                    blobmsg_data(attr), blobmsg_len(attr));
 
-    sprintf(cmd_buffer, "dawn.global.eval_probe_req=%d", blobmsg_get_u32(tb_metric[UCI_EVAL_PROBE_REQ]));
-    uci_set_network(cmd_buffer);
+            for (band = 0; band < __DAWN_BAND_MAX; band++) {
+                if (!strcmp(band_name, band_config_name[band]))
+                    break;
+            }
+            if (band == __DAWN_BAND_MAX) {
+                dawnlog_warning("handle_uci_config: unknown band '%s'.\n", band_name);
+                continue;  // Should we write the metrics of an unknown band to the config file?
+            }
 
-    sprintf(cmd_buffer, "dawn.global.eval_auth_req=%d", blobmsg_get_u32(tb_metric[UCI_EVAL_AUTH_REQ]));
-    uci_set_network(cmd_buffer);
+            // Use our own copy of the name, now we know it's one of ours
+            band_name = band_config_name[band];
 
-    sprintf(cmd_buffer, "dawn.global.eval_assoc_req=%d", blobmsg_get_u32(tb_metric[UCI_EVAL_ASSOC_REQ]));
-    uci_set_network(cmd_buffer);
-
-    sprintf(cmd_buffer, "dawn.global.kicking=%d", blobmsg_get_u32(tb_metric[UCI_KICKING]));
-    uci_set_network(cmd_buffer);
-
-    sprintf(cmd_buffer, "dawn.global.kicking_threshold=%d", blobmsg_get_u32(tb_metric[UCI_KICKING_THRESHOLD]));
-    uci_set_network(cmd_buffer);
-
-    sprintf(cmd_buffer, "dawn.global.deny_auth_reason=%d", blobmsg_get_u32(tb_metric[UCI_DENY_AUTH_REASON]));
-    uci_set_network(cmd_buffer);
-
-    sprintf(cmd_buffer, "dawn.global.deny_assoc_reason=%d", blobmsg_get_u32(tb_metric[UCI_DENY_ASSOC_REASON]));
-    uci_set_network(cmd_buffer);
-
-    sprintf(cmd_buffer, "dawn.global.min_number_to_kick=%d", blobmsg_get_u32(tb_metric[UCI_MIN_NUMBER_TO_KICK]));
-    uci_set_network(cmd_buffer);
-
-    sprintf(cmd_buffer, "dawn.global.chan_util_avg_period=%d", blobmsg_get_u32(tb_metric[UCI_CHAN_UTIL_AVG_PERIOD]));
-    uci_set_network(cmd_buffer);
-
-    sprintf(cmd_buffer, "dawn.global.set_hostapd_nr=%d", blobmsg_get_u32(tb_metric[UCI_SET_HOSTAPD_NR]));
-    uci_set_network(cmd_buffer);
-
-    sprintf(cmd_buffer, "dawn.global.duration=%d", blobmsg_get_u32(tb_metric[UCI_DURATION]));
-    uci_set_network(cmd_buffer);
-
-    sprintf(cmd_buffer, "dawn.global.rrm_mode=%s", blobmsg_get_string(tb_metric[UCI_RRM_MODE]));
-    uci_set_network(cmd_buffer);
-
-    struct blob_attr *tb_band_metric[__UCI_BAND_METRIC_MAX], *attr;
-    int band_len = blobmsg_len(tb_metric[UCI_BAND_METRICS]);
-    struct blob_attr *band_data = blobmsg_data(tb_metric[UCI_BAND_METRICS]);
-    __blob_for_each_attr(attr, band_data, band_len) {
-        struct blobmsg_hdr *hdr = blob_data(attr);
-        const char *band_name = (const char *)hdr->name;
-        int band;
-
-        blobmsg_parse(uci_band_metric_policy, __UCI_BAND_METRIC_MAX, tb_band_metric,
-                blobmsg_data(attr), blobmsg_len(attr));
-
-        for (band = 0; band < __DAWN_BAND_MAX; band++) {
-            if (!strcmp(band_name, band_config_name[band]))
-                break;
+            set_uci_section(band_name, "metric");
+            set_uci_u32(band_name, "initial_score", tb_band_metric[UCI_INITIAL_SCORE]);
+            set_uci_u32(band_name, "ht_support", tb_band_metric[UCI_HT_SUPPORT]);
+            set_uci_u32(band_name, "vht_support", tb_band_metric[UCI_VHT_SUPPORT]);
+            set_uci_u32(band_name, "no_ht_support", tb_band_metric[UCI_NO_HT_SUPPORT]);
+            set_uci_u32(band_name, "no_vht_support", tb_band_metric[UCI_NO_VHT_SUPPORT]);
+            set_uci_u32(band_name, "rssi", tb_band_metric[UCI_RSSI]);
+            set_uci_u32(band_name, "rssi_val", tb_band_metric[UCI_RSSI_VAL]);
+            set_uci_u32(band_name, "low_rssi_val", tb_band_metric[UCI_LOW_RSSI_VAL]);
+            set_uci_u32(band_name, "low_rssi", tb_band_metric[UCI_LOW_RSSI]);
+            set_uci_u32(band_name, "chan_util", tb_band_metric[UCI_CHAN_UTIL]);
+            set_uci_u32(band_name, "chan_util_val", tb_band_metric[UCI_CHAN_UTIL_VAL]);
+            set_uci_u32(band_name, "max_chan_util", tb_band_metric[UCI_MAX_CHAN_UTIL]);
+            set_uci_u32(band_name, "max_chan_util_val", tb_band_metric[UCI_MAX_CHAN_UTIL_VAL]);
+            set_uci_u32(band_name, "rssi_weight", tb_band_metric[UCI_RSSI_WEIGHT]);
+            set_uci_u32(band_name, "rssi_center", tb_band_metric[UCI_RSSI_CENTER]);
         }
-        if (band == __DAWN_BAND_MAX) {
-            dawnlog_warning("handle_uci_config: unknown band '%s'.\n", band_name);
-            continue;  // Should we write the metrics of an unknown band to the config file?
-        }
-
-        sprintf(cmd_buffer, "dawn.%s=metric", band_name);
-        uci_set_network(cmd_buffer);
-
-        sprintf(cmd_buffer, "dawn.%s.initial_score=%d", band_name, blobmsg_get_u32(tb_band_metric[UCI_INITIAL_SCORE]));
-        uci_set_network(cmd_buffer);
-
-        sprintf(cmd_buffer, "dawn.%s.ht_support=%d", band_name, blobmsg_get_u32(tb_band_metric[UCI_HT_SUPPORT]));
-        uci_set_network(cmd_buffer);
-
-        sprintf(cmd_buffer, "dawn.%s.vht_support=%d", band_name, blobmsg_get_u32(tb_band_metric[UCI_VHT_SUPPORT]));
-        uci_set_network(cmd_buffer);
-
-        sprintf(cmd_buffer, "dawn.%s.no_ht_support=%d", band_name, blobmsg_get_u32(tb_band_metric[UCI_NO_HT_SUPPORT]));
-        uci_set_network(cmd_buffer);
-
-        sprintf(cmd_buffer, "dawn.%s.no_vht_support=%d", band_name, blobmsg_get_u32(tb_band_metric[UCI_NO_VHT_SUPPORT]));
-        uci_set_network(cmd_buffer);
-
-        sprintf(cmd_buffer, "dawn.%s.rssi=%d", band_name, blobmsg_get_u32(tb_band_metric[UCI_RSSI]));
-        uci_set_network(cmd_buffer);
-
-        sprintf(cmd_buffer, "dawn.%s.rssi_val=%d", band_name, blobmsg_get_u32(tb_band_metric[UCI_RSSI_VAL]));
-        uci_set_network(cmd_buffer);
-
-        sprintf(cmd_buffer, "dawn.%s.low_rssi_val=%d", band_name, blobmsg_get_u32(tb_band_metric[UCI_LOW_RSSI_VAL]));
-        uci_set_network(cmd_buffer);
-
-        sprintf(cmd_buffer, "dawn.%s.low_rssi=%d", band_name, blobmsg_get_u32(tb_band_metric[UCI_LOW_RSSI]));
-        uci_set_network(cmd_buffer);
-
-        sprintf(cmd_buffer, "dawn.%s.chan_util=%d", band_name, blobmsg_get_u32(tb_band_metric[UCI_CHAN_UTIL]));
-        uci_set_network(cmd_buffer);
-
-        sprintf(cmd_buffer, "dawn.%s.chan_util_val=%d", band_name, blobmsg_get_u32(tb_band_metric[UCI_CHAN_UTIL_VAL]));
-        uci_set_network(cmd_buffer);
-
-        sprintf(cmd_buffer, "dawn.%s.max_chan_util=%d", band_name, blobmsg_get_u32(tb_band_metric[UCI_MAX_CHAN_UTIL]));
-        uci_set_network(cmd_buffer);
-
-        sprintf(cmd_buffer, "dawn.%s.max_chan_util_val=%d", band_name, blobmsg_get_u32(tb_band_metric[UCI_MAX_CHAN_UTIL_VAL]));
-        uci_set_network(cmd_buffer);
-
-        sprintf(cmd_buffer, "dawn.%s.rssi_weight=%d", band_name, blobmsg_get_u32(tb_band_metric[UCI_RSSI_WEIGHT]));
-        uci_set_network(cmd_buffer);
-
-        sprintf(cmd_buffer, "dawn.%s.rssi_center=%d", band_name, blobmsg_get_u32(tb_band_metric[UCI_RSSI_CENTER]));
-        uci_set_network(cmd_buffer);
     }
 
     struct blob_attr* tb_times[__UCI_TIMES_MAX];
     blobmsg_parse(uci_times_policy, __UCI_TIMES_MAX, tb_times, blobmsg_data(tb[UCI_TABLE_TIMES]), blobmsg_len(tb[UCI_TABLE_TIMES]));
 
-    sprintf(cmd_buffer, "dawn.times");
-    uci_set_network(cmd_buffer);
+    {
+        // Unnamed section: creates it if absent, matching the previous behaviour
+        char cmd_buffer[] = "dawn.times";
+        uci_set_network(cmd_buffer);
+    }
 
-    set_uci_item("dawn.@times[0].update_client=%d", tb_times[UCI_UPDATE_CLIENT]);
-
-    set_uci_item("dawn.@times[0].remove_client=%d", tb_times[UCI_REMOVE_CLIENT]);
-
-    set_uci_item("dawn.@times[0].remove_probe=%d", tb_times[UCI_REMOVE_PROBE]);
-
-    set_uci_item("dawn.@times[0].remove_ap=%d", tb_times[UCI_REMOVE_AP]);
-
-    set_uci_item("dawn.@times[0].denied_req_threshold=%d", tb_times[UCI_DENIED_REQ_THRESHOLD]);
-
-    set_uci_item("dawn.@times[0].update_hostapd=%d", tb_times[UCI_UPDATE_HOSTAPD]);
-
-    set_uci_item("dawn.@times[0].update_tcp_con=%d", tb_times[UCI_UPDATE_TCP_CON]);
-
-    set_uci_item("dawn.@times[0].update_chan_util=%d", tb_times[UCI_UPDATE_CHAN_UTIL]);
-
-    set_uci_item("dawn.@times[0].update_beacon_reports=%d", tb_times[UCI_UPDATE_BEACON_REPORTS]);
-
-    set_uci_item("dawn.@times[0].con_timeout=%d", tb_times[UCI_CON_TIMEOUT]);
+    set_uci_u32("@times[0]", "update_client", tb_times[UCI_UPDATE_CLIENT]);
+    set_uci_u32("@times[0]", "remove_client", tb_times[UCI_REMOVE_CLIENT]);
+    set_uci_u32("@times[0]", "remove_probe", tb_times[UCI_REMOVE_PROBE]);
+    set_uci_u32("@times[0]", "remove_ap", tb_times[UCI_REMOVE_AP]);
+    set_uci_u32("@times[0]", "denied_req_threshold", tb_times[UCI_DENIED_REQ_THRESHOLD]);
+    set_uci_u32("@times[0]", "update_hostapd", tb_times[UCI_UPDATE_HOSTAPD]);
+    set_uci_u32("@times[0]", "update_tcp_con", tb_times[UCI_UPDATE_TCP_CON]);
+    set_uci_u32("@times[0]", "update_chan_util", tb_times[UCI_UPDATE_CHAN_UTIL]);
+    set_uci_u32("@times[0]", "update_beacon_reports", tb_times[UCI_UPDATE_BEACON_REPORTS]);
+    set_uci_u32("@times[0]", "con_timeout", tb_times[UCI_CON_TIMEOUT]);
 
     uci_reset();
     dawn_metric = uci_get_dawn_metric();

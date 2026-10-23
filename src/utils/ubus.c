@@ -969,7 +969,8 @@ static void ubus_get_rrm_cb(struct ubus_request *req, int type, struct blob_attr
          if(i==2)
          {
             char* neighborreport = blobmsg_get_string(attr);
-            strcpy(entry->neighbor_report,neighborreport);
+            // hostapd's self-NR length isn't ours to trust; truncate to fit
+            snprintf(entry->neighbor_report, sizeof(entry->neighbor_report), "%s", neighborreport);
             dawnlog_debug("Copied Neighborreport: %s,\n", entry->neighbor_report);
          }
          i++;
@@ -1507,7 +1508,14 @@ int parse_add_mac_to_file(struct blob_attr *msg) {
     {
         dawnlog_debug("Iteration through MAC-list\n");
         struct dawn_mac addr;
-        hwaddr_aton(blobmsg_data(attr), addr.u8);
+
+        // This list can arrive from a peer: skip anything that isn't a valid MAC
+        // string, rather than adding an uninitialised address to the maclist.
+        if (blobmsg_type(attr) != BLOBMSG_TYPE_STRING || !blobmsg_check_attr(attr, false) ||
+                hwaddr_aton(blobmsg_get_string(attr), addr.u8)) {
+            dawnlog_warning("Ignoring invalid entry in MAC list\n");
+            continue;
+        }
 
         // Returns item if it was new and added
         if (insert_to_maclist(addr)) {
@@ -1768,7 +1776,11 @@ bool subscriber_to_interface(const char *ifname) {
     dawnlog_debug_func("Entering...");
 
     hostapd_entry = dawn_calloc(1, sizeof(struct hostapd_sock_entry));
-    strcpy(hostapd_entry->iface_name, ifname);
+    if (!hostapd_entry) {
+        dawnlog_error("subscriber_to_interface: not enough memory\n");
+        return false;
+    }
+    snprintf(hostapd_entry->iface_name, sizeof(hostapd_entry->iface_name), "%s", ifname);
 
     // add hostname
     uci_get_hostname(hostapd_entry->hostname);
@@ -2152,17 +2164,17 @@ int build_network_overview(struct blob_buf *b) {
 
         char *nr;
         nr = blobmsg_alloc_string_buffer(b, "neighbor_report", NEIGHBOR_REPORT_LEN);
-        strcpy(nr, m->neighbor_report);
+        snprintf(nr, NEIGHBOR_REPORT_LEN, "%s", m->neighbor_report);
         blobmsg_add_string_buffer(b);
 
         char *iface;
         iface = blobmsg_alloc_string_buffer(b, "iface", MAX_INTERFACE_NAME);
-        sprintf(iface, "%s", m->iface);
+        snprintf(iface, MAX_INTERFACE_NAME, "%s", m->iface);
         blobmsg_add_string_buffer(b);
 
         char *hostname;
         hostname = blobmsg_alloc_string_buffer(b, "hostname", HOST_NAME_MAX);
-        sprintf(hostname, "%s", m->hostname);
+        snprintf(hostname, HOST_NAME_MAX, "%s", m->hostname);
         blobmsg_add_string_buffer(b);
 
         // TODO: Could optimise this by exporting search func, but not a core process
