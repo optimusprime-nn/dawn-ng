@@ -62,21 +62,27 @@ int init_socket_runopts(const char *_ip, int _port, int _multicast_socket) {
     return 0;
 }
 
-// TODO: Will all messages arrive in a single read? Borrow looping partial read from tcpsocket.c?
+// UDP: each datagram is one complete message. Anything malformed is logged and
+// skipped; returning from this function would silently kill the receive thread
+// for the life of the daemon, which a single stray packet used to do.
 static void* receive_msg_inner(void* args, bool is_enc) {
 
     while (1) {
         recv_string_len = recvfrom(sock, recv_string, MAX_RECV_STRING, 0, NULL, 0);
 
-        //FIXME: Next few lines look a bit mangled, with odd strlen() tests, etc...
         if (recv_string_len < 0) {
             dawnlog_error("Could not receive message!");
             continue;
         }
 
         if (recv_string_len == 0) {
-            return 0;
+            // Zero-length datagrams are legal UDP; nothing to do.
+            continue;
         }
+
+        // recvfrom() does not terminate the data, and the static buffer still
+        // holds the tail of any longer, earlier packet.
+        recv_string[recv_string_len] = '\0';
 
         char* final_msg = NULL;
         if (!is_enc)
@@ -85,22 +91,31 @@ static void* receive_msg_inner(void* args, bool is_enc) {
         }
         else
         {
-            size_t gcrypt_max_len = B64_DECODE_LEN(strlen(recv_string));
+            size_t gcrypt_max_len = B64_DECODE_LEN(recv_string_len);
             char* gcrypt_buf = dawn_malloc(gcrypt_max_len);
             if (!gcrypt_buf) {
                 dawnlog_error("Received network error: not enough memory\n");
-                return 0;
+                continue;
             }
 
-            size_t gcrypt_len = b64_decode(recv_string, gcrypt_buf, gcrypt_max_len);
-            final_msg = gcrypt_decrypt_msg(gcrypt_buf, gcrypt_len);
+            // libubox b64_decode() returns -1 on malformed input; storing that in
+            // a size_t made it a huge length handed straight to the decrypter.
+            int gcrypt_len = b64_decode(recv_string, gcrypt_buf, gcrypt_max_len);
+            if (gcrypt_len <= 0) {
+                dawnlog_warning("Received malformed (non-base64) message, ignoring\n");
+                dawn_free(gcrypt_buf);
+                gcrypt_buf = NULL;
+                continue;
+            }
+
+            final_msg = gcrypt_decrypt_msg(gcrypt_buf, (size_t)gcrypt_len);
 
             dawn_free(gcrypt_buf);
             gcrypt_buf = NULL;
 
             if (!final_msg) {
-                dawnlog_error("Received network error: not enough memory\n");
-                return 0;
+                dawnlog_warning("Received message could not be decrypted, ignoring\n");
+                continue;
             }
         }
 
@@ -113,6 +128,8 @@ static void* receive_msg_inner(void* args, bool is_enc) {
             final_msg = NULL;
         }
     }
+
+    return NULL;
 }
 
 void* receive_msg(void* args) {
