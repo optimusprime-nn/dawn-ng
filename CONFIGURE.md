@@ -171,8 +171,15 @@ grep 'CONFIG-G:' `find . -type f -name "*.[ch]"`| sed 's/^.*CONFIG-.: *\(.*\)$/|
 ## Per Band Metric Parameters
 These parameters are repeated in the following sections for each band:
 
-    config metric '802_11a'
-    config metric '802_11g'
+    config metric '802_11g'     # 2.4 GHz
+    config metric '802_11a'     # 5 GHz
+    config metric '802_11_6g'   # 6 GHz (Wi-Fi 6E / 7)
+
+A band without its own section uses the built-in defaults, overridden by any
+of these options set in the `global` section. 6 GHz defaults to the 5 GHz
+values except `initial_score`, which is 105 (a mild preference for the
+usually less congested band; the RSSI terms still keep clients off a weak
+6 GHz link).
 
 These sections are shared by `ubus call dawn reload_config`.
 
@@ -186,7 +193,7 @@ grep 'CONFIG-B:' `find . -type f -name "*.[ch]"`| sed 's/^.*CONFIG-.: *\(.*\)$/|
 |chan_util|Score increment if channel utilization is below chan_util_val|[0]|
 |chan_util_val|Upper threshold for good channel utilization|[140]|
 |ht_support|Score increment if HT is supported|[5]|
-|initial_score|Base score for AP based on operating band|[2.4GHz = 80; 5Ghz = 100]|
+|initial_score|Base score for AP based on operating band|[2.4GHz = 80; 5Ghz = 100; 6GHz = 105]|
 |low_rssi|Score addition when signal is below threshold|[-15] See note 2.|
 |low_rssi_val|Threshold for bad RSSI|[-80] See note 2.|
 |max_chan_util|Score increment if channel utilization is above max_chan_util_val|[-15]|
@@ -219,6 +226,8 @@ grep 'CONFIG-N:' `find . -type f -name "*.[ch]"`|sed 's/^.*CONFIG-.: *\(.*\)$/|\
 -->
 |Parameter|Purpose|Notes [Default is bracketed]|
 |---------|-------|-----|
+|accept_config_push|Apply configuration pushed by other DAWN instances|0 = Never; 1 = From any peer (unsafe without auth_key); [2 = Only from authenticated peers]|
+|auth_key|Shared key authenticating messages between DAWN instances (TCP only). Same on every AP.|64 hex characters; [empty = off]|
 |bandwidth|Unused|N/A|
 |broadcast_ip|IP address for broadcast and multicast|No default|
 |broadcast_port|IP port for broadcast and multicast|[1025]|
@@ -230,6 +239,41 @@ grep 'CONFIG-N:' `find . -type f -name "*.[ch]"`|sed 's/^.*CONFIG-.: *\(.*\)$/|\
 |tcp_ip|IP address for TCP networking|[0.0.0.0]|
 |tcp_port|Port for TCP networking|[1026]|
 |use_symm_enc|Enable encryption of network traffic|[0 = Disabled]; 1 = Enabled|
+
+### Securing peer traffic
+Without `auth_key`, any device that can reach `tcp_port` can feed DAWN
+made-up APs and clients, and (with `accept_config_push 1`) rewrite every
+AP's DAWN configuration. To lock it down:
+
+1. Generate one key and set it on **every** AP (or use the LuCI Setup Check
+   button, then copy the key to the other APs):
+
+       key=$(hexdump -n 32 -e '32/1 "%02x"' /dev/urandom)
+       uci set dawn.@network[0].auth_key="$key" && uci commit dawn && service dawn reload
+
+   `auth_key` and `accept_config_push` are re-read on reload; the other
+   network options need `service dawn restart`.
+2. Keep the APs' clocks in sync (OpenWrt's NTP client is on by default):
+   messages more than 5 minutes off are rejected to limit replays.
+3. Optionally restrict the port to your APs in the firewall, e.g.
+
+       uci add firewall rule
+       uci set firewall.@rule[-1].name='DAWN peers only'
+       uci set firewall.@rule[-1].src='lan'
+       uci set firewall.@rule[-1].proto='tcp'
+       uci set firewall.@rule[-1].dest_port='1026'
+       uci add_list firewall.@rule[-1].src_ip='192.168.1.2'   # one line per other AP
+       uci set firewall.@rule[-1].target='ACCEPT'
+       uci add firewall rule
+       uci set firewall.@rule[-1].name='DAWN drop others'
+       uci set firewall.@rule[-1].src='lan'
+       uci set firewall.@rule[-1].proto='tcp'
+       uci set firewall.@rule[-1].dest_port='1026'
+       uci set firewall.@rule[-1].target='REJECT'
+       uci commit firewall && service firewall restart
+
+`use_symm_enc` remains as before and is reported to be broken; `auth_key`
+does not depend on it.
 
 
 ## Local Parameters

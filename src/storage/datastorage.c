@@ -26,14 +26,16 @@ static int compare_station_count(ap* ap_entry_own, ap* ap_entry_to_compare, stru
 // config section name
 const char *band_config_name[__DAWN_BAND_MAX] = {
     "802_11g",
-    "802_11a"
+    "802_11a",
+    "802_11_6g"
 };
 
 // starting frequency
 // TODO: make this configurable
 const int max_band_freq[__DAWN_BAND_MAX] = {
     2500,
-    5925 // This may cause trouble because there's overlap between bands in different countries
+    5925, // 5 GHz ends at 5885 (ch 177); 6 GHz starts at 5935 (ch 2) / 5955 (ch 1)
+    7125
 };
 
 // FIXME: Using ratio of 4 to exercise skip handling in small network.  Set to 32, 64 or 128 for real use on larger network.

@@ -46,8 +46,9 @@ int get_band(int freq);
 // Band definitions
 // Keep them sorted by frequency, in ascending order
 enum dawn_bands {
-    DAWN_BAND_80211G,
-    DAWN_BAND_80211A,
+    DAWN_BAND_80211G,       // 2.4 GHz
+    DAWN_BAND_80211A,       // 5 GHz
+    DAWN_BAND_80211AX_6G,   // 6 GHz (Wi-Fi 6E / 7)
     __DAWN_BAND_MAX
 };
 
