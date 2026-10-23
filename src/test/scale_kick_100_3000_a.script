@@ -8,7 +8,7 @@ dawn max_chan_util=0
 dawn ap_weight=4
 dawn rssi=32
 dawn low_rssi=0
-dawn min_kick_count=1
+dawn min_number_to_kick=1
 
 # AP
 ap bssid=20:C9:AA:00:01:00 ht_sup=0 vht_sup=0 util=88 stations=8 ssid=aTestSSID weight=10 neighbors=20:C9:AA:00:01:00

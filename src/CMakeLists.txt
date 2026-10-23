@@ -76,12 +76,35 @@ SET(SOURCES_TEST_STORAGE
 SET(SOURCES_TEST_HEADER
         test/test_header.c)
 
+SET(SOURCES_TEST_MSGHANDLER
+        test/test_msghandler.c
+
+        utils/msghandler.c
+        include/msghandler.h
+
+        storage/datastorage.c
+        include/datastorage.h
+
+        utils/utils.c
+        include/utils.h
+
+        utils/mac_utils.c
+        include/mac_utils.h
+
+        utils/memory_utils.c
+        include/memory_utils.h
+
+        utils/ieee80211_utils.c
+        include/ieee80211_utils.h)
+
 SET(LIBS
         ubox ubus json-c blobmsg_json uci gcrypt iwinfo pthread)
 
 ADD_EXECUTABLE(dawn ${SOURCES})
 ADD_EXECUTABLE(test_storage ${SOURCES_TEST_STORAGE})
 ADD_EXECUTABLE(test_header ${SOURCES_TEST_HEADER})
+ADD_EXECUTABLE(test_msghandler ${SOURCES_TEST_MSGHANDLER})
+TARGET_LINK_LIBRARIES(test_msghandler ubox blobmsg_json json-c pthread)
 
 TARGET_LINK_LIBRARIES(dawn ${LIBS})
 

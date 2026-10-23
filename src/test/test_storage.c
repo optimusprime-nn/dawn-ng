@@ -203,13 +203,13 @@ static int array_auto_helper(int action, int i0, int i1)
             ; // Empty statement to allow label before declaration
             if ((action & HELPER_ACTION_MASK) == HELPER_ACTION_ADD)
             {
-                ap* ap0 = dawn_malloc(sizeof(struct ap_s));
+                ap* ap0 = dawn_calloc(1, sizeof(struct ap_s));
                 ap0->bssid_addr = this_mac;
 
                 insert_to_ap_array(ap0, 0);
             }
             else if ((action & HELPER_ACTION_MASK) == HELPER_ACTION_STRESS) {
-                ap* ap0 = dawn_malloc(sizeof(struct ap_s));
+                ap* ap0 = dawn_calloc(1, sizeof(struct ap_s));
                 set_random_mac(ap0->bssid_addr.u8);
 
                 insert_to_ap_array(ap0, faketime);
@@ -223,14 +223,14 @@ static int array_auto_helper(int action, int i0, int i1)
             ; // Empty statement to allow label before declaration
             if ((action & HELPER_ACTION_MASK) == HELPER_ACTION_ADD)
             {
-                client* client0 = dawn_malloc(sizeof(struct client_s));
+                client* client0 = dawn_calloc(1, sizeof(struct client_s));
                 client0->bssid_addr = this_mac;
                 client0->client_addr = this_mac;
 
                 insert_client_to_array(client0, 0);
             }
             else if ((action & HELPER_ACTION_MASK) == HELPER_ACTION_STRESS) {
-                client* client0 = dawn_malloc(sizeof(struct client_s));
+                client* client0 = dawn_calloc(1, sizeof(struct client_s));
                 set_random_mac(client0->client_addr.u8);
                 set_random_mac(client0->bssid_addr.u8);
 
@@ -251,14 +251,14 @@ static int array_auto_helper(int action, int i0, int i1)
             probe_entry* probe0 = NULL;
 
             if ((action & HELPER_ACTION_MASK) == HELPER_ACTION_ADD) {
-                probe0 = dawn_malloc(sizeof(probe_entry));
+                probe0 = dawn_calloc(1, sizeof(probe_entry));
                 probe0->client_addr = this_mac;
                 probe0->bssid_addr = this_mac;
 
                 insert_to_probe_array(probe0, true, true, 0); // TODO: Check bool flags
             }
             else if ((action & HELPER_ACTION_MASK) == HELPER_ACTION_STRESS) {
-                probe0 = dawn_malloc(sizeof(probe_entry));
+                probe0 = dawn_calloc(1, sizeof(probe_entry));
                 set_random_mac(probe0->client_addr.u8);
                 set_random_mac(probe0->bssid_addr.u8);
 
@@ -692,7 +692,7 @@ static int consume_actions(int argc, char* argv[], int harness_verbosity)
         }
         else if (strcmp(*argv, "ap") == 0)
         {
-            ap *ap0 = dawn_malloc(sizeof(struct ap_s));
+            ap *ap0 = dawn_calloc(1, sizeof(struct ap_s));
 
             ap0->freq = 0;
             ap0->ht_support = 0;
@@ -742,7 +742,7 @@ static int consume_actions(int argc, char* argv[], int harness_verbosity)
         }
         else if (strcmp(*argv, "client") == 0)
         {
-            client *cl0 = dawn_malloc(sizeof(struct client_s));
+            client *cl0 = dawn_calloc(1, sizeof(struct client_s));
             //TODO: NULL test
 
             memset(cl0->signature, 0, SIGNATURE_LEN);
@@ -858,7 +858,7 @@ static int consume_actions(int argc, char* argv[], int harness_verbosity)
                         if (harness_verbosity > 1)
                             printf("probe: creating new entry...\n");
                         // MUSTDO: Check all new dawn_malloc() returns
-                        pr0 = dawn_malloc(sizeof(probe_entry));
+                        pr0 = dawn_calloc(1, sizeof(probe_entry));
 
                         pr0->bssid_addr = bmac;
                         pr0->client_addr = cmac;
