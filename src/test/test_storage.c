@@ -1,6 +1,7 @@
 #include <inttypes.h>
 #include <ctype.h>
 
+#include "dawn_stats.h"
 #include "dawn_iwinfo.h"
 #include "memory_utils.h"
 
@@ -64,13 +65,18 @@ int bss_transition_request(uint32_t id, const struct dawn_mac client_addr, struc
 }
 
 
+// When set (the default), kick stubs fake the client moving to the
+// recommended AP. 'sim_moves 0' leaves that to the script, so the result of
+// the request looks like real hostapd success (0).
+static int simulate_moves = 1;
+
 int wnm_disassoc_imminent(uint32_t id, const struct dawn_mac client_addr, struct kicking_nr* neighbor_list, int threshold, uint32_t duration)
 {
 int ret = 0;
 
     printf("wnm_disassoc_imminent() was called...\n");
 
-    if (neighbor_list != NULL)
+    if (neighbor_list != NULL && simulate_moves)
     {
         // Fake a client being disassociated and then rejoining on the recommended neighbor
         client *mc = client_array_get_client(client_addr);
@@ -472,6 +478,26 @@ static int consume_actions(int argc, char* argv[], int harness_verbosity)
             args_required = 1;
 
             print_client_array();
+        }
+        else if (strcmp(*argv, "sim_moves") == 0)
+        {
+            args_required = 2;
+            if (curr_arg + args_required <= argc)
+                simulate_moves = atoi(argv[1]);
+        }
+        else if (strcmp(*argv, "stats_show") == 0)
+        {
+            args_required = 1;
+
+            printf("stats: evaluations=%u stays=%u deferred=%u sent_rssi_compare=%u sent_absolute_rssi=%u moved=%u stayed=%u failed=%u\n",
+                dawn_stats.evaluations, dawn_stats.stays, dawn_stats.kicks_deferred,
+                dawn_stats.kicks_sent[KICK_METHOD_RSSI_COMPARE], dawn_stats.kicks_sent[KICK_METHOD_ABSOLUTE_RSSI],
+                dawn_stats.kicks_moved, dawn_stats.kicks_stayed, dawn_stats.kicks_failed);
+            for (int i = 0; i < dawn_stats.recent_count; i++)
+                printf("stats: kick " MACSTR " from " MACSTR " to " MACSTR " %s %s\n",
+                    MAC2STR(dawn_stats.recent[i].client.u8), MAC2STR(dawn_stats.recent[i].from.u8),
+                    MAC2STR(dawn_stats.recent[i].to.u8), stats_method_name(dawn_stats.recent[i].method),
+                    stats_outcome_name(dawn_stats.recent[i].outcome));
         }
         else if (strcmp(*argv, "ap_add_auto") == 0)
         {

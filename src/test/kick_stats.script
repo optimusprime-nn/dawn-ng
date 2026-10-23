@@ -1,0 +1,21 @@
+# Steering statistics: a client is kicked twice-confirmed to a better AP,
+# then reported on that AP, so its kick outcome must become "moved".
+dawn default
+dawn min_number_to_kick=2
+dawn kicking=1
+dawn bandwidth_threshold=0
+sim_moves 0
+ap bssid=11:22:33:44:55:66 neighbors=112233445566
+ap bssid=22:33:44:55:66:77 neighbors=223344556677
+client bssid=11:22:33:44:55:66 client=ff:ee:dd:cc:bb:aa
+probe bssid=11:22:33:44:55:66 client=ff:ee:dd:cc:bb:aa signal=-85
+probe bssid=22:33:44:55:66:77 client=ff:ee:dd:cc:bb:aa signal=-50
+kick 11:22:33:44:55:66 0
+kick 11:22:33:44:55:66 0
+stats_show
+client bssid=22:33:44:55:66:77 client=ff:ee:dd:cc:bb:aa
+stats_show
+#expect stats: evaluations=2 stays=0 deferred=1 sent_rssi_compare=1 sent_absolute_rssi=0 moved=0 stayed=0 failed=0
+#expect stats: kick FF:EE:DD:CC:BB:AA from 11:22:33:44:55:66 to 22:33:44:55:66:77 rssi_compare pending
+#expect stats: evaluations=2 stays=0 deferred=1 sent_rssi_compare=1 sent_absolute_rssi=0 moved=1 stayed=0 failed=0
+#expect stats: kick FF:EE:DD:CC:BB:AA from 11:22:33:44:55:66 to 22:33:44:55:66:77 rssi_compare moved

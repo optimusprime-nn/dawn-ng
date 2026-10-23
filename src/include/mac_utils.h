@@ -27,7 +27,7 @@ struct __attribute__((__packed__)) dawn_mac
 extern const struct dawn_mac dawn_mac_null;
 
 // Compare a raw MAC address to 00:00:00:00:00:00
-#define mac_is_null(a1) ((a1)[0] == 0) && ((a1)[1] == 0) && ((a1)[2] == 0) && ((a1)[3] == 0) && ((a1)[4] == 0) && ((a1)[5] == 0)
+#define mac_is_null(a1) (((a1)[0] == 0) && ((a1)[1] == 0) && ((a1)[2] == 0) && ((a1)[3] == 0) && ((a1)[4] == 0) && ((a1)[5] == 0))
 
 // For byte arrays outside MAC structure
 #define mac_is_equal(addr1, addr2) (memcmp(addr1, addr2, ETH_ALEN) == 0)

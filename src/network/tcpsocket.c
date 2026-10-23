@@ -8,6 +8,7 @@
 #include "datastorage.h"
 #include "tcpsocket.h"
 #include "dawn_auth.h"
+#include "dawn_stats.h"
 
 #define STR_EVAL(x) #x
 #define STR_QUOTE(x) STR_EVAL(x)
@@ -247,12 +248,15 @@ static void client_read_cb(struct ustream *s, int bytes) {
             size_t body_len = cl->final_len - HEADER_SIZE;
             bool authenticated = false;
 
+            dawn_stats.peer_msgs_received++;
+
             if (dawn_auth_enabled()) {
                 const char *reason = NULL;
                 size_t payload_len = 0;
                 const char *payload = dawn_auth_unwrap(body, body_len, time(0), &payload_len, &reason);
 
                 if (!payload) {
+                    dawn_stats.peer_msgs_rejected_auth++;
                     auth_failure_log(&cl->sin, reason);
                     goto process_done;
                 }

@@ -2,6 +2,7 @@
 #include <libubus.h>
 
 #include "dawn_auth.h"
+#include "dawn_stats.h"
 #include "memory_utils.h"
 #include "networksocket.h"
 #include "tcpsocket.h"
@@ -212,6 +213,10 @@ static int get_hearing_map(struct ubus_context *ctx_local, struct ubus_object *o
 static int get_network(struct ubus_context *ctx_local, struct ubus_object *obj,
                        struct ubus_request_data *req, const char *method,
                        struct blob_attr *msg);
+
+static int get_stats(struct ubus_context *ctx_local, struct ubus_object *obj,
+                     struct ubus_request_data *req, const char *method,
+                     struct blob_attr *msg);
 
 static void ubus_add_dawn_object();
 
@@ -1285,7 +1290,6 @@ void del_client_interface(uint32_t id, const struct dawn_mac client_addr, uint32
 }
 
 int bss_transition_request(uint32_t id, const struct dawn_mac client_addr, struct kicking_nr* neighbor_list, uint32_t duration) {
-    struct hostapd_sock_entry* sub;
     struct blob_buf b = { 0 };
 
     dawnlog_debug_func("Entering...");
@@ -1310,22 +1314,21 @@ int bss_transition_request(uint32_t id, const struct dawn_mac client_addr, struc
     }
 
     blobmsg_close_array(&b, nbs);
-    list_for_each_entry(sub, &hostapd_sock_list, list)
-    {
-        if (sub->subscribed) {
-            int timeout = 1; //TDO: Maybe ID is wrong?! OR CHECK HERE ID
-            ubus_invoke(ctx, id, "bss_transition_request", b.head, NULL, NULL, timeout * 1000);
-        }
-    }
+
+    // id is the hostapd object of the client's own BSS. This used to be
+    // invoked once per subscribed interface - all with the same id - so the
+    // client received the same request several times.
+    int ret = ubus_invoke(ctx, id, "bss_transition_request", b.head, NULL, NULL, 1000);
+    if (ret)
+        dawnlog_warning("bss_transition_request for " MACSTR " failed: %s\n", MAC2STR(client_addr.u8), ubus_strerror(ret));
 
     blob_buf_free(&b);
     dawn_unregmem(&b);
 
-    return 0;
+    return ret;
 }
 
 int wnm_disassoc_imminent(uint32_t id, const struct dawn_mac client_addr, struct kicking_nr* neighbor_list, int threshold, uint32_t duration) {
-    struct hostapd_sock_entry *sub;
     struct blob_buf b = {0};
 
     dawnlog_debug_func("Entering...");
@@ -1350,18 +1353,18 @@ int wnm_disassoc_imminent(uint32_t id, const struct dawn_mac client_addr, struct
     }
 
     blobmsg_close_array(&b, nbs);
-    list_for_each_entry(sub, &hostapd_sock_list, list)
-    {
-        if (sub->subscribed) {
-            int timeout = 1; //TDO: Maybe ID is wrong?! OR CHECK HERE ID
-            ubus_invoke(ctx, id, "bss_transition_request", b.head, NULL, NULL, timeout * 1000);
-        }
-    }
+
+    // id is the hostapd object of the client's own BSS. This used to be
+    // invoked once per subscribed interface - all with the same id - so the
+    // client received the same request several times.
+    int ret = ubus_invoke(ctx, id, "bss_transition_request", b.head, NULL, NULL, 1000);
+    if (ret)
+        dawnlog_warning("bss_transition_request for " MACSTR " failed: %s\n", MAC2STR(client_addr.u8), ubus_strerror(ret));
 
     blob_buf_free(&b);
     dawn_unregmem(&b);
 
-    return 0;
+    return ret;
 }
 
 static void ubus_umdns_cb(struct ubus_request *req, int type, struct blob_attr *msg) {
@@ -1499,6 +1502,7 @@ static const struct ubus_method dawn_methods[] = {
         UBUS_METHOD("add_mac", add_mac, add_del_policy),
         UBUS_METHOD_NOARG("get_hearing_map", get_hearing_map),
         UBUS_METHOD_NOARG("get_network", get_network),
+        UBUS_METHOD_NOARG("get_stats", get_stats),
         UBUS_METHOD_NOARG("reload_config", reload_config)
 };
 
@@ -1624,6 +1628,81 @@ static int get_hearing_map(struct ubus_context *ctx_local, struct ubus_object *o
     return 0;
 }
 
+
+static void blobmsg_add_mac_string(struct blob_buf *b, const char *name, struct dawn_mac mac) {
+    char buf[20];
+    snprintf(buf, sizeof(buf), MACSTR, MAC2STR(mac.u8));
+    blobmsg_add_string(b, name, buf);
+}
+
+static int get_stats(struct ubus_context *ctx_local, struct ubus_object *obj,
+                     struct ubus_request_data *req, const char *method,
+                     struct blob_attr *msg) {
+    struct blob_buf b = {0};
+    time_t now = time(0);
+    int ret;
+
+    blob_buf_init(&b, 0);
+    dawn_regmem(&b);
+
+    blobmsg_add_u32(&b, "uptime", (uint32_t)(now - dawn_stats.started));
+    blobmsg_add_u8(&b, "peer_auth", dawn_auth_enabled());
+
+    // Kick records are written under client_array_mutex
+    dawn_mutex_lock(&client_array_mutex);
+
+    void *t = blobmsg_open_table(&b, "steering");
+    blobmsg_add_u32(&b, "evaluations", dawn_stats.evaluations);
+    blobmsg_add_u32(&b, "stays", dawn_stats.stays);
+    blobmsg_add_u32(&b, "deferred", dawn_stats.kicks_deferred);
+    blobmsg_add_u32(&b, "skipped_active", dawn_stats.kicks_skipped_active);
+    blobmsg_add_u32(&b, "sent_rssi_compare", dawn_stats.kicks_sent[KICK_METHOD_RSSI_COMPARE]);
+    blobmsg_add_u32(&b, "sent_absolute_rssi", dawn_stats.kicks_sent[KICK_METHOD_ABSOLUTE_RSSI]);
+    blobmsg_add_u32(&b, "force_reconnects", dawn_stats.kicks_sent[KICK_METHOD_FORCE_RECONNECT]);
+    blobmsg_add_u32(&b, "failed", dawn_stats.kicks_failed);
+    blobmsg_add_u32(&b, "moved", dawn_stats.kicks_moved);
+    blobmsg_add_u32(&b, "stayed", dawn_stats.kicks_stayed);
+    blobmsg_close_table(&b, t);
+
+    t = blobmsg_open_table(&b, "peers");
+    blobmsg_add_u32(&b, "messages_received", dawn_stats.peer_msgs_received);
+    blobmsg_add_u32(&b, "messages_rejected_auth", dawn_stats.peer_msgs_rejected_auth);
+    blobmsg_add_u32(&b, "config_push_applied", dawn_stats.config_push_applied);
+    blobmsg_add_u32(&b, "config_push_ignored", dawn_stats.config_push_ignored);
+    blobmsg_close_table(&b, t);
+
+    // Newest first
+    void *a = blobmsg_open_array(&b, "recent_kicks");
+    for (int i = 0; i < dawn_stats.recent_count; i++) {
+        int idx = (dawn_stats.recent_next - 1 - i + STATS_RECENT_KICKS) % STATS_RECENT_KICKS;
+        struct kick_record *r = &dawn_stats.recent[idx];
+        void *e = blobmsg_open_table(&b, NULL);
+
+        blobmsg_add_u32(&b, "age", (uint32_t)(now - r->time));
+        blobmsg_add_mac_string(&b, "client", r->client);
+        blobmsg_add_mac_string(&b, "from", r->from);
+        if (!mac_is_null(r->to.u8))
+            blobmsg_add_mac_string(&b, "to", r->to);
+        blobmsg_add_string(&b, "method", stats_method_name(r->method));
+        if (r->method == KICK_METHOD_RSSI_COMPARE)
+            blobmsg_add_u32(&b, "score_gain", r->score_gain);
+        blobmsg_add_string(&b, "outcome", stats_outcome_name(r->outcome));
+        if (r->outcome != KICK_OUTCOME_PENDING)
+            blobmsg_add_u32(&b, "outcome_after", (uint32_t)(r->outcome_time - r->time));
+        blobmsg_close_table(&b, e);
+    }
+    blobmsg_close_array(&b, a);
+
+    dawn_mutex_unlock(&client_array_mutex);
+
+    ret = ubus_send_reply(ctx_local, req, b.head);
+    if (ret)
+        dawnlog_error("Failed to send stats: %s\n", ubus_strerror(ret));
+
+    blob_buf_free(&b);
+    dawn_unregmem(&b);
+    return 0;
+}
 
 static int get_network(struct ubus_context *ctx_local, struct ubus_object *obj,
                        struct ubus_request_data *req, const char *method,
