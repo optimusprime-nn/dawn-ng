@@ -12,6 +12,10 @@
 #define STR_QUOTE(x) STR_EVAL(x)
 
 #define HEADER_SIZE sizeof(uint32_t)
+// Upper bound on a single framed message (header included). Peers are trusted
+// to be other DAWN instances, but the length prefix arrives off the wire and
+// must never be used unchecked for allocation or buffer arithmetic.
+#define MAX_TCP_MSG_LEN (4U * 1024U * 1024U)
 #define PING_STR "ping"
 #define PONG_STR "pong"
 #define PING_SIZE (strlen(PING_STR)+1)
@@ -52,6 +56,11 @@ static void client_close(struct ustream *s) {
     struct client *cl = container_of(s, struct client, s.stream);
 
     dawnlog_warning("Connection closed\n");
+    if (cl->str) {
+        // A partially received message would otherwise leak here
+        dawn_free(cl->str);
+        cl->str = NULL;
+    }
     ustream_free(s);
     dawn_unregmem(s);
     close(cl->s.fd.fd);
@@ -77,31 +86,36 @@ static void client_notify_state(struct ustream *s) {
     client_close(s);
 }
 
-static void client_to_server_close(struct ustream *s) {
-    struct network_con_s *con = container_of(s, struct network_con_s, stream.stream);
-
+// Tear down an outgoing (client-to-server) connection, whatever state it is in.
+// Until connect_cb() runs the socket is watched via con->fd; afterwards it is
+// owned by the ustream. Either way it must be removed from uloop before the
+// memory is freed, or the event loop is left holding a dangling pointer.
+static void tcp_con_close(struct network_con_s *con) {
     dawnlog_debug_func("Entering...");
 
-    dawnlog_warning("Connection to server closed\n");
-    ustream_free(s);
-    dawn_unregmem(s);
+    if (con->connected) {
+        ustream_free(&con->stream.stream);
+        dawn_unregmem(&con->stream.stream);
+    } else {
+        uloop_fd_delete(&con->fd);
+    }
 
     close(con->fd.fd);
     list_del(&con->list);
     dawn_free(con);
-    con = NULL;
 }
 
 static void client_to_server_state(struct ustream *s) {
-    struct client *cl = container_of(s, struct client, s.stream);
+    // This stream belongs to a network_con_s, not a struct client
+    struct network_con_s *con = container_of(s, struct network_con_s, stream.stream);
 
     dawnlog_debug_func("Entering...");
 
     if (!s->write_error && !s->eof)
         return;
 
-    dawnlog_error("Closing connection, pending: %d, total: %d\n", s->w.data_bytes, cl->ctr);
-    client_to_server_close(s);
+    dawnlog_error("Closing connection to %s, pending: %d\n", inet_ntoa(con->sock_addr.sin_addr), s->w.data_bytes);
+    tcp_con_close(con);
 }
 
 static void client_read_cb(struct ustream *s, int bytes) {
@@ -137,11 +151,30 @@ static void client_read_cb(struct ustream *s, int bytes) {
             }
 
             cl->curr_len += HEADER_SIZE;
-            cl->final_len = ntohl(*(uint32_t *)cl->str);
+            uint32_t net_len;
+            memcpy(&net_len, cl->str, sizeof(net_len)); // avoid unaligned/aliasing read
+            cl->final_len = ntohl(net_len);
+
+            // The length covers the header itself, so anything <= HEADER_SIZE is
+            // malformed: it would make (final_len - curr_len) underflow below and
+            // turn into a heap overflow. Oversized lengths are a memory DoS.
+            // In either case the stream is desynchronised, so drop the peer.
+            if (cl->final_len <= HEADER_SIZE || cl->final_len > MAX_TCP_MSG_LEN) {
+                dawnlog_error("tcp_socket: invalid message length %" PRIu32 " from %s, closing\n",
+                        cl->final_len, inet_ntoa(cl->sin.sin_addr));
+                dawn_free(cl->str);
+                cl->str = NULL;
+                cl->curr_len = 0;
+                cl->final_len = 0;
+                s->eof = true;
+                ustream_state_change(s); // deferred -> client_notify_state -> client_close
+                return;
+            }
 
             // On failure, dawn_realloc returns a null pointer. The original pointer str
             // remains valid and may need to be deallocated.
-            char *str_tmp = dawn_realloc(cl->str, cl->final_len);
+            // +1 so the payload can be NUL-terminated before it is parsed as a string.
+            char *str_tmp = dawn_realloc(cl->str, cl->final_len + 1);
             if (!str_tmp) {
                 dawnlog_error("not enough memory (%" PRIu32 " @ " STR_QUOTE(__LINE__) ")\n", cl->final_len);
                 dawn_free(cl->str);
@@ -172,7 +205,9 @@ static void client_read_cb(struct ustream *s, int bytes) {
             cl->curr_len += this_read;
             dawnlog_debug("tcp_socket: ...and we're back, now have %" PRIu32 " bytes\n", cl->curr_len);
             if (cl->curr_len == cl->final_len){//ensure recv final_len bytes.
-                // Full message now received
+                // Full message now received. Senders include the NUL, but that is
+                // not something we can rely on from the network.
+                cl->str[cl->final_len] = '\0';
                 cl->state = READ_STATUS_COMPLETE;
                 dawnlog_debug("tcp_socket: message completed\n");
             }
@@ -191,10 +226,13 @@ static void client_read_cb(struct ustream *s, int bytes) {
             if (network_config.use_symm_enc) {
                 char *dec = gcrypt_decrypt_msg(cl->str + HEADER_SIZE, cl->final_len - HEADER_SIZE);//len of str is final_len
                 if (!dec) {
-                    dawnlog_error("not enough memory (" STR_QUOTE(__LINE__) ")\n");
-                    dawn_free(cl->str);
-                    cl->str = NULL;
-                    break;
+                    // Bad ciphertext length, cipher error or OOM. Drop just this
+                    // message; the framing is intact so the stream can continue.
+                    // (Previously this freed cl->str but left state COMPLETE, so
+                    // the next read callback dereferenced NULL.)
+                    dawnlog_error("tcp_socket: failed to decrypt message from %s, dropping\n",
+                            inet_ntoa(cl->sin.sin_addr));
+                    goto process_done;
                 }
                 handle_network_msg(dec);
                 dawn_free(dec);
@@ -226,6 +264,11 @@ static void server_cb(struct uloop_fd *fd, unsigned int events) {
 
     if (!next_client)
         next_client = dawn_calloc(1, sizeof(*next_client));
+
+    if (!next_client) {
+        dawnlog_error("server_cb: not enough memory\n");
+        return;
+    }
 
     cl = next_client;
 
@@ -264,49 +307,53 @@ int run_server(char *ipv4, int port) {
     return 0;
 }
 
+// The only thing a server ever sends down our outgoing connection is a ping.
 static void client_ping_read_cb(struct ustream *s, int bytes) {
-    int len;
-    char buf[2048];
-    uint32_t ping_len = HEADER_SIZE + PING_SIZE;
+    struct network_con_s *con = container_of(s, struct network_con_s, stream.stream);
+    const uint32_t ping_len = HEADER_SIZE + PING_SIZE;
+    char buf[HEADER_SIZE + PING_SIZE + 1];
 
     dawnlog_debug_func("Entering...");
 
-    len = ustream_read(s, buf, ping_len);
+    // TCP may split or coalesce writes: only consume whole pings, and leave any
+    // partial one in the stream for next time (previously it was discarded,
+    // desynchronising every later read on the connection).
+    while (ustream_pending_data(s, false) >= ping_len) {
+        int len = ustream_read(s, buf, ping_len);
+        uint32_t net_len;
 
-    /* client received ping, send pong back to server */
-    if (len == ping_len && ntohl(*(uint32_t *)buf) == ping_len && memcmp(buf + HEADER_SIZE, PING_STR, PING_SIZE) == 0) {
-        struct network_con_s *con = container_of(s, struct network_con_s, stream.stream);
-        int len_ustream;
-        const char *msg = PONG_STR;
-        size_t msglen = PONG_SIZE;
-        uint32_t final_len = msglen + HEADER_SIZE;
+        if (len != (int)ping_len)
+            break;
+
+        memcpy(&net_len, buf, sizeof(net_len));
+        if (ntohl(net_len) != ping_len || memcmp(buf + HEADER_SIZE, PING_STR, PING_SIZE) != 0) {
+            buf[len] = '\0';
+            dawnlog_error("Unexpected %d bytes from %s, closing\n", len, inet_ntoa(con->sock_addr.sin_addr));
+            // Can't free the stream from inside its own read callback: libubox
+            // still uses it on return. Defer to client_to_server_state().
+            s->eof = true;
+            ustream_state_change(s);
+            return;
+        }
+
+        /* client received ping, send pong back to server */
+        uint32_t final_len = HEADER_SIZE + PONG_SIZE;
         char final_str[HEADER_SIZE + PONG_SIZE];
-        uint32_t *msg_header = (uint32_t *)final_str;
+        uint32_t msg_header = htonl(final_len);
 
         dawnlog_info("Client: received ping from %s:%u, now=%d\n", inet_ntoa(con->sock_addr.sin_addr), ntohs(con->sock_addr.sin_port), (int)time(0));
         con->time_alive = time(0);
 
-        *msg_header = htonl(final_len);
-        memcpy(final_str + HEADER_SIZE, msg, msglen);
-        len_ustream = ustream_write(&con->stream.stream, final_str, final_len, 0);
-        if (len_ustream <= 0) {
+        memcpy(final_str, &msg_header, HEADER_SIZE);
+        memcpy(final_str + HEADER_SIZE, PONG_STR, PONG_SIZE);
+        if (ustream_write(&con->stream.stream, final_str, final_len, 0) <= 0) {
             dawnlog_error("Ustream error(" STR_QUOTE(__LINE__) ")!\n");
-            //ERROR HANDLING!
-            if (con->stream.stream.write_error) {
-                ustream_free(&con->stream.stream);
-                dawn_unregmem(&con->stream.stream);
-                close(con->fd.fd);
-                list_del(&con->list);
-                dawn_free(con);
-                con = NULL;
-            }
+            // On write_error libubox has already scheduled a state change, which
+            // closes the connection via client_to_server_state() once we return.
+            if (con->stream.stream.write_error)
+                return;
         }
-
-    } else {
-        buf[len] = 0;
-        dawnlog_error("Read %d bytes upexpected: %s\n", len, buf);
     }
-
 }
 
 static void connect_cb(struct uloop_fd *f, unsigned int events) {
@@ -317,10 +364,7 @@ static void connect_cb(struct uloop_fd *f, unsigned int events) {
 
     if (f->eof || f->error) {
         dawnlog_error("Connection failed (%s)\n", f->eof ? "EOF" : "ERROR");
-        close(entry->fd.fd);
-        list_del(&entry->list);
-        dawn_free(entry);
-        entry = NULL;
+        tcp_con_close(entry); // not yet connected, so also unregisters from uloop
         return;
     }
 
@@ -355,15 +399,17 @@ int add_tcp_connection(char *ipv4, int port) {
         {
             return 0;
         } else{
-            // Delete already existing entry
-            close(tmp->fd.fd);
-            list_del(&tmp->list);
-            dawn_free(tmp);
+            // Delete already existing (still connecting) entry
+            tcp_con_close(tmp);
             tmp = NULL;
         }
     }
 
     struct network_con_s *tcp_entry = dawn_calloc(1, sizeof(struct network_con_s));
+    if (!tcp_entry) {
+        dawnlog_error("add_tcp_connection: not enough memory\n");
+        return -1;
+    }
     tcp_entry->fd.fd = usock(USOCK_TCP | USOCK_NONBLOCK, ipv4, port_str);
     tcp_entry->sock_addr = serv_addr;
 
@@ -418,11 +464,7 @@ void send_tcp(char *msg) {
                     dawnlog_error("Ustream error(" STR_QUOTE(__LINE__) ")!\n");
                     //ERROR HANDLING!
                     if (con->stream.stream.write_error) {
-                        ustream_free(&con->stream.stream);
-                        dawn_unregmem(&con->stream.stream);
-                        close(con->fd.fd);
-                        list_del(&con->list);
-                        dawn_free(con);
+                        tcp_con_close(con);
                         con = NULL;
                     }
                 }
@@ -455,11 +497,7 @@ void send_tcp(char *msg) {
                     //ERROR HANDLING!
                     dawnlog_error("Ustream error(" STR_QUOTE(__LINE__) ")!\n");
                     if (con->stream.stream.write_error) {
-                        ustream_free(&con->stream.stream);
-                        dawn_unregmem(&con->stream.stream);
-                        close(con->fd.fd);
-                        list_del(&con->list);
-                        dawn_free(con);
+                        tcp_con_close(con);
                         con = NULL;
                     }
                 }
@@ -513,11 +551,7 @@ void check_timeout(int timeout) {
         {
             if (now - con->time_alive > timeout || now - con->time_alive < -timeout) {
                 dawnlog_info("Server: close client_to_server connection! timeout=%d\n", (int)(now - con->time_alive));
-                ustream_free(&con->stream.stream);
-                dawn_unregmem(&con->stream.stream);
-                close(con->fd.fd);
-                list_del(&con->list);
-                dawn_free(con);
+                tcp_con_close(con);
             }
         }
     } while (0);
