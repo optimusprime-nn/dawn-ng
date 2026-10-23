@@ -13,6 +13,7 @@ OUT="${1:-$ROOT/build-upstream}"
 WORK="$OUT/.work"
 rm -rf "$OUT" && mkdir -p "$OUT/dawn" "$OUT/luci" "$OUT/packages" "$WORK"
 cd "$ROOT"
+git worktree prune
 
 # ---------------------------------------------------------------- DAWN itself
 # Only what belongs upstream: the daemon, its tests and docs, and the CI
@@ -30,7 +31,7 @@ git format-patch -q -o "$WORK/dawn-raw" "$BASE..HEAD" -- $DAWN_PATHS
 # appropriate message.
 git worktree add -q --detach "$WORK/dawn" upstream/master
 W="$WORK/dawn"
-git -C "$W" am -q --committer-date-is-author-date "$WORK"/dawn-raw/*.patch
+git -C "$W" am -q --whitespace=nowarn --committer-date-is-author-date "$WORK"/dawn-raw/*.patch
 subject_rev() { git -C "$W" log --format='%H %s' upstream/master..HEAD | awk -v s="$1" 'index($0, s) { print $1; exit }'; }
 FIRST=$(subject_rev "ci: build OpenWrt")
 LAST=$(subject_rev "docs: deployment and test guide")
@@ -38,7 +39,7 @@ TIP=$(git -C "$W" rev-parse HEAD)
 if [ -n "$FIRST" ] && [ -n "$LAST" ]; then
 	git -C "$W" checkout -q "$LAST"
 	git -C "$W" reset -q --soft "$FIRST^"
-	git -C "$W" commit -q -C "$FIRST" -m "test: run host tests in CI; add a live peer-message test tool
+	git -C "$W" commit -q --author="$(git -C "$W" log -1 --format='%an <%ae>' "$FIRST")" -m "test: run host tests in CI; add a live peer-message test tool
 
 - tools/ci/build-host-deps.sh builds libubox and ubus from source and
   tools/ci/run-host-tests.sh builds test_storage / test_msghandler with
@@ -49,8 +50,22 @@ if [ -n "$FIRST" ] && [ -n "$LAST" ]; then
   would, and reports whether it survived. Config-push messages are only
   sent with --include-config-push, as DAWN commits them to
   /etc/config/dawn."
-	git -C "$W" cherry-pick -q --allow-empty "$LAST..$TIP" >/dev/null
+	[ "$LAST" = "$TIP" ] || git -C "$W" cherry-pick --allow-empty "$LAST..$TIP" >/dev/null
 fi
+# Fork-only commits that also touched an upstream file get folded into the
+# commit before them (their message would make no sense upstream).
+fold_into_parent() {
+	rev=$(subject_rev "$1")
+	[ -n "$rev" ] || return 0
+	tip=$(git -C "$W" rev-parse HEAD)
+	parent=$(git -C "$W" rev-parse "$rev^")
+	git -C "$W" checkout -q "$rev"
+	git -C "$W" reset -q --soft "$parent^"
+	git -C "$W" commit -q -C "$parent"
+	[ "$rev" = "$tip" ] || git -C "$W" cherry-pick --allow-empty "$rev..$tip" >/dev/null
+}
+fold_into_parent "tools: make-upstream-patches.sh"
+
 git -C "$W" format-patch -q -o "$OUT/dawn" upstream/master..HEAD
 git -C "$W" diff --check upstream/master..HEAD -- . || { echo "whitespace errors in DAWN series"; exit 1; }
 git worktree remove --force "$W"
