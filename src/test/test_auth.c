@@ -45,6 +45,18 @@ int main(void) {
     CHECK(dawn_auth_unwrap(w, wlen, now, &plen, &reason) == NULL && strstr(reason, "tag"), "tampered payload rejected");
     w[wlen - 3] ^= 1;
 
+    {
+        /* Timestamps near the int64 limits must be rejected without signed
+         * overflow (found by fuzz_auth; UBSan flags the old code). */
+        char forged[DAWN_AUTH_HDR_LEN + 4] = "DWA1";
+        memset(forged + 4, 0x80, 1);
+        memset(forged + 5, 0x00, 7);
+        CHECK(dawn_auth_unwrap(forged, sizeof(forged), now, &plen, &reason) == NULL && strstr(reason, "timestamp"),
+              "timestamp 0x8000000000000000 rejected");
+        memset(forged + 4, 0xff, 8);
+        CHECK(dawn_auth_unwrap(forged, sizeof(forged), now, &plen, NULL) == NULL, "timestamp 0xffffffffffffffff rejected");
+    }
+
     w[8] ^= 1; /* timestamp byte: changes the MAC input and the time */
     CHECK(dawn_auth_unwrap(w, wlen, now, &plen, NULL) == NULL, "tampered timestamp rejected");
     w[8] ^= 1;

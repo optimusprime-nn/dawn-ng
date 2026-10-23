@@ -1,0 +1,45 @@
+name: Fuzz
+
+# Runs the libFuzzer targets (peer message handling, message authentication)
+# for a few minutes on every push, and longer once a week.
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: 'Seconds per fuzz target'
+        default: '600'
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake clang-18 libclang-rt-18-dev libjson-c-dev libgcrypt20-dev
+
+      - name: Build libubox and ubus
+        run: PREFIX="$HOME/deps" tools/ci/build-host-deps.sh
+
+      - name: Fuzz
+        env:
+          CC: clang-18
+          FUZZ_SECONDS: ${{ github.event.inputs.seconds || (github.event_name == 'schedule' && '1800') || '120' }}
+        run: PREFIX="$HOME/deps" BUILD="$RUNNER_TEMP/fuzz" tools/ci/run-fuzz.sh
+
+      - name: Upload crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: ${{ runner.temp }}/fuzz/artifacts/
