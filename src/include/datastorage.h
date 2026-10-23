@@ -132,7 +132,13 @@ struct network_config_s {
     int use_symm_enc;
     int collision_domain;
     int bandwidth;
+    char auth_key[64 + 1];   // shared HMAC key, 64 hex characters (see dawn_auth.h)
+    int accept_config_push;  // 0 = never; 1 = from any peer; 2 = only authenticated peers
 };
+
+#define ACCEPT_CONFIG_PUSH_NEVER 0
+#define ACCEPT_CONFIG_PUSH_ANY 1
+#define ACCEPT_CONFIG_PUSH_AUTHENTICATED 2
 
 extern struct network_config_s network_config;
 extern struct time_config_s timeout_config;

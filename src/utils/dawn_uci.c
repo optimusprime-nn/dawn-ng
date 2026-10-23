@@ -390,6 +390,8 @@ struct network_config_s uci_get_dawn_network() {
         .use_symm_enc = 0,
         .collision_domain = -1,
         .bandwidth = -1,
+        .auth_key = "",
+        .accept_config_push = ACCEPT_CONFIG_PUSH_AUTHENTICATED,
     };
 
     dawnlog_debug_func("Entering...");
@@ -437,6 +439,12 @@ struct network_config_s uci_get_dawn_network() {
             DAWN_SET_CONFIG_INT(ret, s, collision_domain);
             // CONFIG-N: bandwidth|Unused|N/A
             DAWN_SET_CONFIG_INT(ret, s, bandwidth);
+            // CONFIG-N: auth_key|Shared key authenticating messages between DAWN instances (TCP only). Same on every AP.|64 hex characters; [empty = off]
+            const char* str_auth_key = uci_lookup_option_string(uci_ctx, s, "auth_key");
+            if (str_auth_key)
+                snprintf(ret.auth_key, sizeof(ret.auth_key), "%s", str_auth_key);
+            // CONFIG-N: accept_config_push|Apply configuration pushed by other DAWN instances|0 = Never; 1 = From any peer (unsafe without auth_key); [2 = Only from authenticated peers]
+            DAWN_SET_CONFIG_INT(ret, s, accept_config_push);
             return ret;
         }
     }

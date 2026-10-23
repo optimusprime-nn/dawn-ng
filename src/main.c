@@ -108,6 +108,7 @@ int main(int argc, char **argv) {
     // init crypto
     gcrypt_init();
     gcrypt_set_key_and_iv(net_config.shared_key, net_config.iv);
+    apply_peer_auth_config(&net_config);
 
     // TODO: Why the extra loacl struct to retuen into?
     struct time_config_s time_config = uci_get_time_config();

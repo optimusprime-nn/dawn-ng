@@ -274,7 +274,7 @@ static int handle_set_probe(struct blob_attr* msg) {
     return 0;
 }
 
-int handle_network_msg(char* msg) {
+int handle_network_msg(char* msg, bool authenticated) {
     struct blob_attr* tb[__NETWORK_MAX];
     char* method;
     char* data;
@@ -359,8 +359,17 @@ int handle_network_msg(char* msg) {
         parse_add_mac_to_file(data_buf.head);
     }
     else if (strncmp(method, "uci", 2) == 0) { // TODO: Should this be 3 or is something special happening?
-        dawnlog_debug("HANDLING UCI!\n");
-        handle_uci_config(data_buf.head);
+        // Config pushes rewrite /etc/config/dawn, so by default they are only
+        // accepted from peers that proved they hold the shared auth_key.
+        int policy = network_config.accept_config_push;
+        if (policy == ACCEPT_CONFIG_PUSH_ANY || (policy == ACCEPT_CONFIG_PUSH_AUTHENTICATED && authenticated)) {
+            dawnlog_debug("HANDLING UCI!\n");
+            handle_uci_config(data_buf.head);
+        }
+        else {
+            dawnlog_warning("Ignoring configuration pushed by a peer (accept_config_push=%d, message %s)\n",
+                    policy, authenticated ? "authenticated" : "not authenticated");
+        }
     }
     else
     {
