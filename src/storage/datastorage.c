@@ -8,6 +8,7 @@
 #include "ieee80211_utils.h"
 
 #include "datastorage.h"
+#include "dawn_stats.h"
 #include "test_storage.h"
 #include "msghandler.h"
 #include "ubus.h"
@@ -498,6 +499,10 @@ int kick_clients(struct dawn_mac bssid_mac, uint32_t id) {
     while (kicked_clients == 0 && j  != NULL && mac_is_equal_bb(j->bssid_addr, kicking_ap->bssid_addr)) {
         struct kicking_nr *kick_nr_list = NULL;
 
+        // A successful kick deletes (frees) j below, so take the next entry now.
+        // Reading j->next_entry_bc after that was a use-after-free on every kick.
+        client *next_j = j->next_entry_bc;
+
         int kick_type = 0;
         int own_score = 0;
 
@@ -505,6 +510,7 @@ int kick_clients(struct dawn_mac bssid_mac, uint32_t id) {
             dawnlog_info("Client " MACSTR ": Suppressing check due to MAC list entry\n", MAC2STR(j->client_addr.u8));
         }
         else {
+            dawn_stats.evaluations++;
             dawn_mutex_require(&probe_array_mutex);
             probe_entry* own_probe = probe_array_get_entry(j->client_addr, kicking_ap->bssid_addr);
 
@@ -562,6 +568,7 @@ int kick_clients(struct dawn_mac bssid_mac, uint32_t id) {
             // + ping pong behavior of clients will be reduced
             j->kick_count++;
             if (j->kick_count < dawn_metric.min_number_to_kick) {
+                dawn_stats.kicks_deferred++;
                 dawnlog_info("Client " MACSTR ": kickcount %d below threshold of %d!\n", MAC2STR(j->client_addr.u8), j->kick_count,
                     dawn_metric.min_number_to_kick);
             }
@@ -569,6 +576,7 @@ int kick_clients(struct dawn_mac bssid_mac, uint32_t id) {
                 float rx_rate, tx_rate;
                 bool have_bandwidth_iwinfo = get_bandwidth_iwinfo(j->client_addr, &rx_rate, &tx_rate);
                 if (!have_bandwidth_iwinfo && dawn_metric.bandwidth_threshold > 0) {
+                    dawn_stats.kicks_skipped_active++;
                     dawnlog_info("Client " MACSTR ": No active transmission data for client. Don't kick!\n", MAC2STR(j->client_addr.u8));
                 }
                 else
@@ -577,6 +585,7 @@ int kick_clients(struct dawn_mac bssid_mac, uint32_t id) {
                     // <= 6MBits <- probably no transmission
                     // tx_rate has always some weird value so don't use ist
                     if (have_bandwidth_iwinfo && dawn_metric.bandwidth_threshold != 0 && rx_rate > dawn_metric.bandwidth_threshold) {
+                        dawn_stats.kicks_skipped_active++;
                         dawnlog_info("Client " MACSTR ": Don't kick due to active data transfer: RX rate %f exceeds %d limit\n", MAC2STR(j->client_addr.u8), rx_rate, dawn_metric.bandwidth_threshold);
                     }
                     else
@@ -606,6 +615,10 @@ int kick_clients(struct dawn_mac bssid_mac, uint32_t id) {
                         {
                             int sync_kick = wnm_disassoc_imminent(id, j->client_addr, kick_nr_list, own_score + dawn_metric.kicking_threshold, dawn_metric.duration);
 
+                            stats_kick(time(0), KICK_METHOD_RSSI_COMPARE, j->client_addr, kicking_ap->bssid_addr,
+                                    kick_nr_list ? &kick_nr_list->nr_ap->bssid_addr : NULL,
+                                    kick_nr_list ? kick_nr_list->score - own_score : 0, sync_kick);
+
                             if (!sync_kick)
                             {
                                 client_array_delete(j, false);
@@ -618,7 +631,10 @@ int kick_clients(struct dawn_mac bssid_mac, uint32_t id) {
                         }
                         else if (kick_type == 2)
                         {
-                            bss_transition_request(id, j->client_addr, kick_nr_list, dawn_metric.duration);
+                            int ret = bss_transition_request(id, j->client_addr, kick_nr_list, dawn_metric.duration);
+
+                            stats_kick(time(0), KICK_METHOD_ABSOLUTE_RSSI, j->client_addr, kicking_ap->bssid_addr,
+                                    kick_nr_list ? &kick_nr_list->nr_ap->bssid_addr : NULL, 0, ret);
                         }
 
                         kicked_clients++;
@@ -630,9 +646,11 @@ int kick_clients(struct dawn_mac bssid_mac, uint32_t id) {
             // FIXME: Causes clients to be kicked until first probe is received, which is a bit brutal for pre-802.11k clients.
             dawnlog_info("Client " MACSTR ": No Information about client. Force reconnect:\n", MAC2STR(j->client_addr.u8));
             print_client_entry(DAWNLOG_TRACE, j);
+            stats_kick(time(0), KICK_METHOD_FORCE_RECONNECT, j->client_addr, kicking_ap->bssid_addr, NULL, 0, 0);
             del_client_interface(id, j->client_addr, 0, 1, 0);
         }
         else {
+            dawn_stats.stays++;
             dawnlog_info("Client " MACSTR ": Current AP is best. Client will stay:\n", MAC2STR(j->client_addr.u8));
             print_client_entry(DAWNLOG_TRACE, j);
             // set kick counter to 0 again
@@ -642,7 +660,7 @@ int kick_clients(struct dawn_mac bssid_mac, uint32_t id) {
         remove_kicking_nr_list(kick_nr_list);
         kick_nr_list = NULL;
 
-        j = j->next_entry_bc;
+        j = next_j;
     }
 
     if (dawn_metric.set_hostapd_nr == 2)
@@ -1240,6 +1258,9 @@ client* client_array_update_entry(client* entry, time_t expiry) {
 
     entry->time = expiry;
 
+    // Resolves the outcome of any recent kick of this client
+    stats_client_seen(entry->client_addr, entry->bssid_addr, expiry);
+
 	    if (*entry_pos != NULL &&
 	            mac_compare_bb(entry->bssid_addr, (*entry_pos)->bssid_addr) == 0 && 
 	            mac_compare_bb(entry->client_addr, (*entry_pos)->client_addr) == 0)
@@ -1271,6 +1292,8 @@ client *insert_client_to_array(client *entry, time_t expiry) {
     dawn_mutex_require(&client_array_mutex);
 
     client * ret = NULL;
+
+    stats_client_seen(entry->client_addr, entry->bssid_addr, expiry);
 
     client **client_tmp = client_find_first_bc_entry(entry->bssid_addr, entry->client_addr, true);
 

@@ -13,6 +13,7 @@
 #include "dawn_iwinfo.h"
 #include "tcpsocket.h"
 #include "crypto.h"
+#include "dawn_stats.h"
 
 void daemon_shutdown();
 
@@ -109,6 +110,7 @@ int main(int argc, char **argv) {
     gcrypt_init();
     gcrypt_set_key_and_iv(net_config.shared_key, net_config.iv);
     apply_peer_auth_config(&net_config);
+    stats_init(time(0));
 
     // TODO: Why the extra loacl struct to retuen into?
     struct time_config_s time_config = uci_get_time_config();

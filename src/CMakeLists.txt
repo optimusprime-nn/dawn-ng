@@ -13,6 +13,9 @@ SET(SOURCES
         storage/datastorage.c
         include/datastorage.h
 
+        storage/dawn_stats.c
+        include/dawn_stats.h
+
         network/networksocket.c
         include/networksocket.h
 
@@ -73,6 +76,9 @@ SET(SOURCES_TEST_STORAGE
         storage/datastorage.c
         include/datastorage.h
 
+        storage/dawn_stats.c
+        include/dawn_stats.h
+
         utils/ieee80211_utils.c
         include/ieee80211_utils.h)
 
@@ -87,6 +93,9 @@ SET(SOURCES_TEST_MSGHANDLER
 
         storage/datastorage.c
         include/datastorage.h
+
+        storage/dawn_stats.c
+        include/dawn_stats.h
 
         utils/utils.c
         include/utils.h

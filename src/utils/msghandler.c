@@ -1,5 +1,6 @@
 #include <libubus.h>
 
+#include "dawn_stats.h"
 #include "memory_utils.h"
 #include "dawn_uci.h"
 #include "datastorage.h"
@@ -364,9 +365,11 @@ int handle_network_msg(char* msg, bool authenticated) {
         int policy = network_config.accept_config_push;
         if (policy == ACCEPT_CONFIG_PUSH_ANY || (policy == ACCEPT_CONFIG_PUSH_AUTHENTICATED && authenticated)) {
             dawnlog_debug("HANDLING UCI!\n");
-            handle_uci_config(data_buf.head);
+            if (handle_uci_config(data_buf.head) == 0)
+                dawn_stats.config_push_applied++;
         }
         else {
+            dawn_stats.config_push_ignored++;
             dawnlog_warning("Ignoring configuration pushed by a peer (accept_config_push=%d, message %s)\n",
                     policy, authenticated ? "authenticated" : "not authenticated");
         }
