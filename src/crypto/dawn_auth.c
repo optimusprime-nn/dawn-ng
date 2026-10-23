@@ -107,10 +107,14 @@ const char *dawn_auth_unwrap(const char *buf, size_t len, time_t now, size_t *pa
     else if (!buf || len < DAWN_AUTH_HDR_LEN || memcmp(b, DAWN_AUTH_MAGIC, DAWN_AUTH_MAGIC_LEN) != 0)
         why = "message is not authenticated (peer has no auth_key?)";
     else {
-        int64_t ts = (int64_t)get_be64(b + DAWN_AUTH_MAGIC_LEN);
-        int64_t skew = (int64_t)now - ts;
+        // The timestamp is attacker controlled: compare without signed
+        // arithmetic, which overflowed for values near INT64_MIN (found by
+        // fuzz_auth).
+        uint64_t ts = get_be64(b + DAWN_AUTH_MAGIC_LEN);
+        uint64_t unow = now > 0 ? (uint64_t)now : 0;
+        uint64_t skew = ts > unow ? ts - unow : unow - ts;
 
-        if (skew > DAWN_AUTH_MAX_SKEW || skew < -DAWN_AUTH_MAX_SKEW)
+        if (skew > DAWN_AUTH_MAX_SKEW)
             why = "timestamp outside allowed window (clocks out of sync, or replay)";
         else if (compute_tag(b, buf + DAWN_AUTH_HDR_LEN, len - DAWN_AUTH_HDR_LEN, expected))
             why = "HMAC failure";

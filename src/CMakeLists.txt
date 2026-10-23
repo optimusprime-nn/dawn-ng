@@ -87,6 +87,7 @@ SET(SOURCES_TEST_HEADER
 
 SET(SOURCES_TEST_MSGHANDLER
         test/test_msghandler.c
+        test/msghandler_stubs.c
 
         utils/msghandler.c
         include/msghandler.h
@@ -136,3 +137,17 @@ TARGET_LINK_LIBRARIES(dawn ${LIBS})
 
 INSTALL(TARGETS dawn
         RUNTIME DESTINATION /usr/sbin/)
+
+# libFuzzer targets: cmake -DDAWN_FUZZ=ON -DCMAKE_C_COMPILER=clang, with
+# -fsanitize=address,undefined in CMAKE_C_FLAGS (see tools/ci/run-fuzz.sh).
+OPTION(DAWN_FUZZ "Build libFuzzer targets (requires clang)" OFF)
+IF(DAWN_FUZZ)
+    LIST(REMOVE_ITEM SOURCES_TEST_MSGHANDLER test/test_msghandler.c)
+    ADD_EXECUTABLE(fuzz_msghandler fuzz/fuzz_msghandler.c ${SOURCES_TEST_MSGHANDLER})
+    SET_TARGET_PROPERTIES(fuzz_msghandler PROPERTIES COMPILE_FLAGS "-fsanitize=fuzzer" LINK_FLAGS "-fsanitize=fuzzer")
+    TARGET_LINK_LIBRARIES(fuzz_msghandler ubox blobmsg_json json-c pthread)
+
+    ADD_EXECUTABLE(fuzz_auth fuzz/fuzz_auth.c crypto/dawn_auth.c utils/utils.c utils/memory_utils.c)
+    SET_TARGET_PROPERTIES(fuzz_auth PROPERTIES COMPILE_FLAGS "-fsanitize=fuzzer" LINK_FLAGS "-fsanitize=fuzzer")
+    TARGET_LINK_LIBRARIES(fuzz_auth gcrypt)
+ENDIF()
