@@ -8,6 +8,8 @@
 #include "msghandler.h"
 
 
+// Only ever used by one thread: handle_network_msg() runs on the uloop thread
+// (TCP, network_option 2/3) or on the UDP receive thread (0/1), never both.
 static struct blob_buf network_buf;
 static struct blob_buf data_buf;
 

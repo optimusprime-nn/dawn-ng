@@ -156,6 +156,9 @@ extern struct probe_metric_s dawn_metric;
 
 #define SSID_MAX_LEN 32
 
+// Upper bound on the "never kick" MAC list (and so /tmp/dawn_mac_list)
+#define MAC_LIST_MAX 1024
+
 // ---------------- Structs ----------------
 typedef struct probe_entry_s {
 // List admin fields
