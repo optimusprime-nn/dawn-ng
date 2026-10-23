@@ -10,3 +10,4 @@ debian/changelog
 debian/tmp/
 build-host-tests/
 __pycache__/
+build-upstream/

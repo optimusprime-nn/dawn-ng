@@ -30,4 +30,3 @@ int send_set_probe(struct dawn_mac c) { return 0; }
 int wnm_disassoc_imminent(uint32_t id, const struct dawn_mac c, struct kicking_nr* n, int t, uint32_t d) { return 0; }
 int bss_transition_request(uint32_t id, const struct dawn_mac c, struct kicking_nr* n, uint32_t d) { return 0; }
 int parse_add_mac_to_file(struct blob_attr *msg) { return 0; } // lives in ubus.c
-
