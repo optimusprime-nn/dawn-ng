@@ -1,0 +1,17 @@
+# Same client, same signal, heard by a 5 GHz AP and a 6 GHz AP.
+# Expect the 6 GHz AP to score initial_score_6g - initial_score_5g higher,
+# and no "beyond the last known band" warning for 6 GHz frequencies.
+dawn default
+dawn initial_score_6g=105
+ap bssid=55:55:55:55:55:01 freq=5180 ht_sup=1 vht_sup=1
+ap bssid=66:66:66:66:66:01 freq=5955 ht_sup=1 vht_sup=1
+ap bssid=66:66:66:66:66:02 freq=7115 ht_sup=1 vht_sup=1
+probe bssid=55:55:55:55:55:01 client=aa:aa:aa:aa:aa:01 signal=-55 freq=5180 ht_cap=1 vht_cap=1
+probe bssid=66:66:66:66:66:01 client=aa:aa:aa:aa:aa:01 signal=-55 freq=5955 ht_cap=1 vht_cap=1
+probe bssid=66:66:66:66:66:02 client=aa:aa:aa:aa:aa:01 signal=-55 freq=7115 ht_cap=1 vht_cap=1
+eval_probe_metric 55:55:55:55:55:01 aa:aa:aa:aa:aa:01
+eval_probe_metric 66:66:66:66:66:01 aa:aa:aa:aa:aa:01
+eval_probe_metric 66:66:66:66:66:02 aa:aa:aa:aa:aa:01
+#expect eval_probe_metric: Returned 120
+#expect eval_probe_metric: Returned 125
+#reject beyond the last known band

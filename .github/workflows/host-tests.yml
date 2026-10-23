@@ -17,7 +17,7 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake libjson-c-dev
+          sudo apt-get install -y --no-install-recommends cmake libjson-c-dev libgcrypt20-dev
 
       - name: Build libubox and ubus
         run: PREFIX="$HOME/deps" tools/ci/build-host-deps.sh

@@ -313,7 +313,8 @@ static int load_int_band(int* v, char* s)
 {
   int ret = 0;
   sscanf(s, "%" "d", v);
-  v[1] = v[0];
+  for (int band = 1; band < __DAWN_BAND_MAX; band++)
+    v[band] = v[0];
   return ret;
 }
 
@@ -626,6 +627,22 @@ static int consume_actions(int argc, char* argv[], int harness_verbosity)
                     dawn_metric.rrm_mode_order[0] = WLAN_RRM_CAPS_BEACON_REPORT_PASSIVE;
                     dawn_metric.rrm_mode_order[1] = WLAN_RRM_CAPS_BEACON_REPORT_ACTIVE;
                     dawn_metric.rrm_mode_order[2] = WLAN_RRM_CAPS_BEACON_REPORT_TABLE;
+
+                    // 6 GHz: same as 5 GHz
+                    dawn_metric.ap_weight[2] = dawn_metric.ap_weight[1];
+                    dawn_metric.ht_support[2] = dawn_metric.ht_support[1];
+                    dawn_metric.vht_support[2] = dawn_metric.vht_support[1];
+                    dawn_metric.no_ht_support[2] = dawn_metric.no_ht_support[1];
+                    dawn_metric.no_vht_support[2] = dawn_metric.no_vht_support[1];
+                    dawn_metric.rssi[2] = dawn_metric.rssi[1];
+                    dawn_metric.low_rssi[2] = dawn_metric.low_rssi[1];
+                    dawn_metric.initial_score[2] = dawn_metric.initial_score[1];
+                    dawn_metric.chan_util[2] = dawn_metric.chan_util[1];
+                    dawn_metric.max_chan_util[2] = dawn_metric.max_chan_util[1];
+                    dawn_metric.rssi_val[2] = dawn_metric.rssi_val[1];
+                    dawn_metric.low_rssi_val[2] = dawn_metric.low_rssi_val[1];
+                    dawn_metric.chan_util_val[2] = dawn_metric.chan_util_val[1];
+                    dawn_metric.max_chan_util_val[2] = dawn_metric.max_chan_util_val[1];
                 }
                 else if (!strncmp(fn, "ap_weight=", 10)) load_int_band(dawn_metric.ap_weight, fn + 10);
                 else if (!strncmp(fn, "ht_support=", 11)) load_int_band(dawn_metric.ht_support, fn + 11);
@@ -635,6 +652,7 @@ static int consume_actions(int argc, char* argv[], int harness_verbosity)
                 else if (!strncmp(fn, "rssi=", 5)) load_int_band(dawn_metric.rssi, fn + 5);
                 else if (!strncmp(fn, "low_rssi=", 9)) load_int_band(dawn_metric.low_rssi, fn + 9);
                 else if (!strncmp(fn, "freq=", 5)) load_int(&dawn_metric.initial_score[1], fn + 5);
+                else if (!strncmp(fn, "initial_score_6g=", 17)) load_int(&dawn_metric.initial_score[2], fn + 17);
                 else if (!strncmp(fn, "chan_util=", 10)) load_int_band(dawn_metric.chan_util, fn + 10);
                 else if (!strncmp(fn, "max_chan_util=", 14)) load_int_band(dawn_metric.max_chan_util, fn + 14);
                 else if (!strncmp(fn, "rssi_val=", 9)) load_int_band(dawn_metric.rssi_val, fn + 9);
@@ -782,8 +800,8 @@ static int consume_actions(int argc, char* argv[], int harness_verbosity)
                 else if (!strncmp(fn, "preauth=", 8)) load_u8(&cl0->preauth, fn + 8);
                 else if (!strncmp(fn, "wds=", 4)) load_u8(&cl0->wds, fn + 4);
                 else if (!strncmp(fn, "wmm=", 4)) load_u8(&cl0->wmm, fn + 4);
-                else if (!strncmp(fn, "ht_cap=", 3)) load_u8(&cl0->ht, fn + 3);
-                else if (!strncmp(fn, "vht_cap=", 4)) load_u8(&cl0->vht, fn + 4);
+                else if (!strncmp(fn, "ht_cap=", 7)) load_u8(&cl0->ht, fn + 7);
+                else if (!strncmp(fn, "vht_cap=", 8)) load_u8(&cl0->vht, fn + 8);
                 else if (!strncmp(fn, "wps=", 4)) load_u8(&cl0->wps, fn + 4);
                 else if (!strncmp(fn, "mfp=", 4)) load_u8(&cl0->mfp, fn + 4);
                 else if (!strncmp(fn, "time=", 5)) load_time(&cl0->time, fn + 5);
