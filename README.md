@@ -1,3 +1,8 @@
+> **This is a development fork for testing.** It adds hardening against
+> malformed peer messages, a LuCI **Setup Check** page, and CI-built OpenWrt
+> 24.10 / 25.12 packages. See **[DEPLOY.md](DEPLOY.md)** to install and test
+> it. Upstream: [berlin-open-wireless-lab/DAWN](https://github.com/berlin-open-wireless-lab/DAWN).
+
 ![DAWN PICTURE](https://image.ibb.co/nbmNfJ/dawn_bla.png)
 
 # DAWN

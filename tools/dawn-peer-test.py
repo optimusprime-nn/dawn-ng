@@ -15,8 +15,15 @@ and after for a definitive answer.
 
 Only point this at your own equipment. It requires DAWN's TCP networking
 without encryption (network_option 2 or 3, use_symm_enc 0, the default).
+
+Side effects: the test messages add a few made-up APs and clients to DAWN's
+tables; they expire on their own (remove_ap, default 460 s) or on
+`service dawn restart`. Messages that push configuration ("method": "uci")
+are skipped by default, because DAWN commits them to /etc/config/dawn;
+use --include-config-push to send them anyway (back up the config first).
 """
 import argparse
+import json
 import os
 import socket
 import struct
@@ -91,6 +98,8 @@ def main():
     ap.add_argument("--port", type=int, default=1026, help="DAWN tcp_port (default 1026)")
     ap.add_argument("--file", default=DEFAULT_FILE, help="messages, one JSON per line ('#' lines are labels)")
     ap.add_argument("--wait", type=float, default=1.0, help="seconds to watch each connection (default 1)")
+    ap.add_argument("--include-config-push", action="store_true",
+                    help="also send config-push messages (these CHANGE /etc/config/dawn on the router)")
     ap.add_argument("--bad-frames", action="store_true",
                     help="also send malformed TCP frames (zero / huge / short length headers)")
     args = ap.parse_args()
@@ -99,7 +108,18 @@ def main():
         print(f"Cannot connect to DAWN at {args.host}:{args.port}. Is it running with TCP networking?")
         return 2
 
-    tests = [(label, frame(msg)) for label, msg in load(args.file)]
+    tests = []
+    skipped = 0
+    for label, msg in load(args.file):
+        try:
+            is_config = json.loads(msg).get("method", "").startswith("uci")
+        except (ValueError, AttributeError):
+            is_config = False
+        if is_config and not args.include_config_push:
+            print(f"[SKIP]     {label}: config push (use --include-config-push)")
+            skipped += 1
+            continue
+        tests.append((label, frame(msg)))
     if args.bad_frames:
         # Expected outcome for these: DAWN drops the connection but keeps running.
         tests += [
@@ -125,7 +145,7 @@ def main():
                 time.sleep(1)
 
     print()
-    print(f"{len(tests) - failures}/{len(tests)} passed")
+    print(f"{len(tests) - failures}/{len(tests)} passed" + (f", {skipped} skipped" if skipped else ""))
     print("Tip: also check `logread -e dawn` on the router for crashes or respawns.")
     return 1 if failures else 0
 
