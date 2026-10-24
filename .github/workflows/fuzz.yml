@@ -1,7 +1,6 @@
+# dawn-ng .github/workflows/fuzz.yml — self-hosted version.
+# The weekly run (30 min per target) is the job that benefits most from the VM.
 name: Fuzz
-
-# Runs the libFuzzer targets (peer message handling, message authentication)
-# for a few minutes on every push, and longer once a week.
 
 on:
   push:
@@ -19,8 +18,12 @@ permissions:
 
 jobs:
   fuzz:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, big]
+    container: ubuntu:24.04
     steps:
+      - name: Prepare container
+        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates curl sudo build-essential
+
       - uses: actions/checkout@v4
 
       - name: Install build tools

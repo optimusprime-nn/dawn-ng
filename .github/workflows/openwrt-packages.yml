@@ -1,3 +1,9 @@
+# dawn-ng .github/workflows/openwrt-packages.yml — self-hosted version.
+# Pushes and PRs build on the Linux CI VM. Tag builds (signed with USIGN_KEY /
+# APK_KEY, then released) stay on GitHub-hosted runners so the signing keys
+# never touch the VM.
+# openwrt/gh-action-sdk is a Docker action, so this job runs on the host, not in
+# a `container:`; it chowns the workspace to uid 1000, which the last step undoes.
 name: OpenWrt packages
 
 # Builds installable dawn + luci-app-dawn packages with the official OpenWrt
@@ -20,7 +26,7 @@ permissions:
 jobs:
   build:
     name: OpenWrt ${{ matrix.release }} / ${{ matrix.arch }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ startsWith(github.ref, 'refs/tags/') && 'ubuntu-latest' || fromJSON('["self-hosted","linux","big"]') }}
     strategy:
       fail-fast: false
       matrix:
@@ -68,6 +74,12 @@ jobs:
           name: dawn-openwrt-${{ matrix.release }}-${{ matrix.arch }}
           path: ${{ runner.temp }}/out/
           if-no-files-found: error
+
+      # Hand the workspace back to the runner user so the next job's checkout can
+      # clean it (persistent self-hosted workspace; no sudo on the host).
+      - name: Restore workspace ownership
+        if: always()
+        run: docker run --rm -v "$GITHUB_WORKSPACE:/w" alpine chown -R "$(id -u):$(id -g)" /w
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')

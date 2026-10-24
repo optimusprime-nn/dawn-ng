@@ -1,8 +1,7 @@
+# dawn-ng .github/workflows/luci-tests.yml — self-hosted version.
+# setup-python inside the ubuntu:24.04 container replaces the hosted image's
+# system pip (24.04's own pip refuses system-wide installs, PEP 668).
 name: LuCI tests
-
-# Loads luci-app-dawn's pages with the real LuCI JavaScript runtime in
-# Chromium against a mock router (tools/luci-test) and checks what they show
-# and which UCI changes they make.
 
 on:
   push:
@@ -16,9 +15,17 @@ permissions:
 
 jobs:
   luci:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, big]
+    container: ubuntu:24.04
     steps:
+      - name: Prepare container
+        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates curl sudo
+
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - name: Fetch LuCI runtime (luci-base + bootstrap theme)
         run: |
