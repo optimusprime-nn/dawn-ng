@@ -302,7 +302,7 @@ uci set dawn.global.kicking=3 && uci commit dawn && service dawn reload
 
 ```sh
 # hostapd has the methods DAWN needs (full wpad + 802.11v)
-ubus -v list 'hostapd.*' | grep -E 'bss_transition_request|wnm_disassoc_imminent'
+ubus -v list 'hostapd.*' | grep bss_transition_request
 
 # What DAWN knows: APs (local and peers) and connected clients
 ubus call dawn get_network

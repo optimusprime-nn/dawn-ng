@@ -21,8 +21,12 @@
 
 const STATUS_ORDER = { error: 0, warning: 1, info: 2, ok: 3 };
 
-/* hostapd ubus methods DAWN uses to steer clients (see DAWN's INSTALL.md) */
-const STEERING_METHODS = [ 'bss_transition_request', 'wnm_disassoc_imminent' ];
+/* hostapd ubus method DAWN uses to steer clients (both kicking methods call it;
+ * see bss_transition_request() / wnm_disassoc_imminent() in DAWN's ubus.c).
+ * Only full wpad builds (CONFIG_WNM) have it. Do not also require
+ * 'wnm_disassoc_imminent': hostapd in OpenWrt 25.12 no longer offers that
+ * method, so requiring it reported every 25.12 router as wpad-basic. */
+const STEERING_METHODS = [ 'bss_transition_request' ];
 
 function isOn(value) {
 	return value == '1' || value == 'true' || value == 'on' || value == 'yes';

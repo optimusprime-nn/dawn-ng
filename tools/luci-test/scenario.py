@@ -39,7 +39,8 @@ def build(dawn_config_path, variant):
             if sec['.type'] == 'network':
                 sec['auth_key'] = '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff'
 
-    STEER = {'bss_transition_request': {}, 'wnm_disassoc_imminent': {}, 'rrm_nr_get_own': {}}
+    # Methods of a full wpad on OpenWrt 25.12 (no wnm_disassoc_imminent any more)
+    STEER = {'bss_transition_request': {}, 'rrm_beacon_req': {}, 'rrm_nr_get_own': {}, 'rrm_nr_set': {}}
     radios = {
       'radio0': {'up': True, 'config': {'band': '2g'}, 'interfaces': [
          {'section': 'default_radio0', 'ifname': 'phy0-ap0', 'config': {'mode': 'ap', 'ssid': 'Home'},
