@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <signal.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <syslog.h>
 
@@ -50,41 +51,63 @@ void signal_handler(int sig) {
 
 int main(int argc, char **argv) {
     const char *ubus_socket = NULL;
+    const char *loglevel_arg = NULL;
+    const char *logdest_arg = NULL;
+
+    // Options are read before the config so that -C can point at another
+    // config directory; -l / -o are applied afterwards so they still
+    // override the loglevel from the config.
+    //   -l info|trace|debug   log level      -o stdio|syslog   log destination
+    //   -s <path>             ubus socket    -C <dir>          UCI config directory
+    int opt;
+    while ((opt = getopt(argc, argv, "l:o:s:C:")) != -1) {
+        switch (opt) {
+        case 'l':
+            loglevel_arg = optarg;
+            break;
+        case 'o':
+            logdest_arg = optarg;
+            break;
+        case 's':
+            ubus_socket = optarg;
+            break;
+        case 'C':
+            dawn_uci_confdir = optarg;
+            break;
+        default: /* '?' */
+            fprintf(stderr, "usage: %s [-l info|trace|debug] [-o stdio|syslog] [-s ubus_socket] [-C config_dir]\n", argv[0]);
+            return 1;
+        }
+    }
 
     /* Load local config now so command line can override it */
-    uci_init();
+    if (uci_init() < 0) {
+        fprintf(stderr, "dawn: cannot load the 'dawn' UCI config%s%s\n",
+                dawn_uci_confdir ? " from " : "", dawn_uci_confdir ? dawn_uci_confdir : "");
+        return 1;
+    }
     local_config = uci_get_local_config();
 
     int logdest = DAWNLOG_DEST_SYSLOG;
 
-    int opt = getopt(argc, argv, "l:o:");
+    if (loglevel_arg) {
+        if (!strcmp(loglevel_arg, "info"))
+            dawnlog_minlevel(DAWNLOG_INFO);
+        else if (!strcmp(loglevel_arg, "trace"))
+            dawnlog_minlevel(DAWNLOG_TRACE);
+        else if (!strcmp(loglevel_arg, "debug"))
+            dawnlog_minlevel(DAWNLOG_DEBUG);
+        else
+            dawnlog_warning("Unrecognised option for -l: %s\n", loglevel_arg);
+    }
 
-    while (opt != -1) {
-        switch (opt) {
-        case 'l':
-            if (!strcmp(optarg, "info"))
-                dawnlog_minlevel(DAWNLOG_INFO);
-            else if (!strcmp(optarg, "trace"))
-                dawnlog_minlevel(DAWNLOG_TRACE);
-            else if (!strcmp(optarg, "debug"))
-                dawnlog_minlevel(DAWNLOG_DEBUG);
-            else
-                dawnlog_warning("Unrecognised option for -l: %s\n", optarg);
-        break;
-        case 'o':
-            if (!strcmp(optarg, "stdio"))
-                logdest = DAWNLOG_DEST_STDIO;
-            else if (!strcmp(optarg, "syslog"))
-                logdest = DAWNLOG_DEST_SYSLOG;
-            else
-                dawnlog_warning("Unrecognised option for -o: %s\n", optarg);
-            break;
-        default: /* '?' */
-            dawnlog_warning("Unrecognised option (%s), aborting read of them\n", argv[0]);
-            break;
-        }
-
-        opt = getopt(argc, argv, "l:o:");
+    if (logdest_arg) {
+        if (!strcmp(logdest_arg, "stdio"))
+            logdest = DAWNLOG_DEST_STDIO;
+        else if (!strcmp(logdest_arg, "syslog"))
+            logdest = DAWNLOG_DEST_SYSLOG;
+        else
+            dawnlog_warning("Unrecognised option for -o: %s\n", logdest_arg);
     }
 
     if (logdest == DAWNLOG_DEST_SYSLOG)

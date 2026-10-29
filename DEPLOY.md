@@ -432,7 +432,7 @@ Push to `main` (or open a pull request). The workflows:
 | Workflow | What it does |
 |---|---|
 | **OpenWrt packages** | builds the packages and feeds for 24.10 and 25.12, five architectures (about 20 minutes) |
-| **Host tests** | DAWN's test programs and scripts under AddressSanitizer + UndefinedBehaviorSanitizer |
+| **Host tests** | DAWN's test programs and scripts under AddressSanitizer + UndefinedBehaviorSanitizer, then the daemon integration test: two real DAWN daemons with fake hostapd/umdns/iwinfo, checking discovery, steering, backoff, peer authentication and malformed peer messages end to end |
 | **Fuzz** | libFuzzer on peer message handling and authentication: 2 min per push, 30 min weekly |
 | **LuCI tests** | the LuCI pages in Chromium with the real LuCI runtime against a mock router |
 
@@ -467,6 +467,7 @@ sudo apt install cmake clang libjson-c-dev libgcrypt20-dev
 PREFIX=$HOME/dawn-deps tools/ci/build-host-deps.sh
 PREFIX=$HOME/dawn-deps tools/ci/run-host-tests.sh          # sanitizer tests
 PREFIX=$HOME/dawn-deps FUZZ_SECONDS=60 tools/ci/run-fuzz.sh # fuzzing
+PREFIX=$HOME/dawn-deps tools/ci/run-integration-test.sh     # two live daemons (~30 s; --keep keeps the logs)
 
 # LuCI pages (needs an openwrt/luci checkout and Playwright)
 pip install playwright && python -m playwright install chromium

@@ -12,3 +12,5 @@ build-host-tests/
 __pycache__/
 build-upstream/
 build-fuzz/
+build-integration/
+__pycache__/
