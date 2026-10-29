@@ -1,3 +1,5 @@
+# dawn-ng .github/workflows/host-tests.yml — self-hosted version.
+# Same steps as before; runs in an ubuntu:24.04 container on the Linux CI VM.
 name: Host tests (ASan/UBSan)
 
 on:
@@ -10,9 +12,13 @@ permissions:
 
 jobs:
   host-tests:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, big]
+    container: ubuntu:24.04
     timeout-minutes: 30
     steps:
+      - name: Prepare container
+        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates curl sudo build-essential pkg-config
+
       - uses: actions/checkout@v4
 
       - name: Install build tools
