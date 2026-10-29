@@ -601,7 +601,7 @@ struct network_con_s* tcp_list_contains_address(struct sockaddr_in entry) {
 
     list_for_each_entry(con, &tcp_sock_list, list)
     {
-        if(entry.sin_addr.s_addr == con->sock_addr.sin_addr.s_addr)
+        if (entry.sin_addr.s_addr == con->sock_addr.sin_addr.s_addr && entry.sin_port == con->sock_addr.sin_port)
         {
             return con;
         }
