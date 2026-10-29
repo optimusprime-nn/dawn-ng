@@ -155,10 +155,23 @@ If your image has a different basic variant (`wpad-basic-wolfssl`,
 apk add --allow-untrusted /tmp/dawn-feed/dawn-*.apk /tmp/dawn-feed/luci-app-dawn-*.apk
 ```
 
-`--allow-untrusted` is needed because OpenWrt 25.12 doesn't sign
-individually built packages. Install only packages from this repo's CI or
-that you built yourself. To avoid the flag, see
-[Signed feed](#signed-feed-optional) below.
+`--allow-untrusted` is needed the first time, while the router doesn't yet
+know this repository's signing key. Install only packages from this repo's
+CI or that you built yourself.
+
+**Later updates from LuCI (25.12):** the `dawn` package installs this
+repository's public key (`/etc/apk/keys/dawn-dev.pem`), and CI signs every
+`.apk` with the matching private key (when the `APK_KEY` secret is set, see
+[Signed feed](#signed-feed-optional)). So from the second install on, you
+can update without SSH: **System → Software → Upload Package...**, pick
+`dawn-*.apk` from the artifact, **Install**, then the same for
+`luci-app-dawn-*.apk`. Upload `dawn` first: a newer `luci-app-dawn` may
+need the newer daemon. If LuCI still says *UNTRUSTED signature*, the
+installed `dawn` predates this (install once more over SSH as above), or
+the build had no `APK_KEY` (the CI run shows a warning).
+
+On 24.10, LuCI's upload works without any of this (opkg doesn't check
+signatures of uploaded packages).
 
 **OpenWrt 24.10:**
 
@@ -195,10 +208,16 @@ always installs as an upgrade.
 ### Signed feed (optional)
 
 CI signs each feed's index once the repository has the secrets
-**`USIGN_KEY`** (24.10) and **`APK_KEY`** (25.12). The private keys were
-handed over separately; the public halves are in `keys/`. With a signed feed
-and the public key on the router, packages install without
-`--allow-untrusted`.
+**`USIGN_KEY`** (24.10) and **`APK_KEY`** (25.12), and with `APK_KEY` also
+every 25.12 package on its own. The private keys were handed over
+separately; the public halves are in `keys/`, and the `dawn` package
+installs them. With a signed feed and the public key on the router,
+packages install without `--allow-untrusted`. CI checks that `APK_KEY`
+matches `keys/dawn-dev.pem` and fails the build if it doesn't.
+
+To add a secret: repository **Settings → Secrets and variables → Actions
+→ New repository secret**, name `APK_KEY`, value the whole private key
+file including the `-----BEGIN ... KEY-----` lines.
 
 This path hasn't been tested on a router yet. If it fails, use the commands
 above.

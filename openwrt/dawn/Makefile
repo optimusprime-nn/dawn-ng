@@ -37,6 +37,10 @@ endef
 define Package/dawn/description
   This package implements a decentralized wireless daemon.
   Development build with network message hardening.
+  Also installs the public keys this repository's CI signs its packages
+  with (/etc/apk/keys/dawn-dev.pem, /etc/opkg/keys/af358956e09d0655), so
+  later builds install without --allow-untrusted, including through
+  LuCI's "Upload Package...".
 endef
 
 define Package/dawn/conffiles
@@ -55,6 +59,9 @@ define Package/dawn/install
 	$(INSTALL_BIN) ./files/dawn.init $(1)/etc/init.d/dawn
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) $(DAWN_SRC_DIR)/dawn-config $(1)/etc/config/dawn
+	$(INSTALL_DIR) $(1)/etc/apk/keys $(1)/etc/opkg/keys
+	$(INSTALL_DATA) $(DAWN_SRC_DIR)/keys/dawn-dev.pem $(1)/etc/apk/keys/dawn-dev.pem
+	$(INSTALL_DATA) $(DAWN_SRC_DIR)/keys/af358956e09d0655 $(1)/etc/opkg/keys/af358956e09d0655
 endef
 
 $(eval $(call BuildPackage,dawn))
