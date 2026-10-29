@@ -11,6 +11,7 @@ permissions:
 jobs:
   host-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -19,8 +20,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake libjson-c-dev libgcrypt20-dev
 
-      - name: Build libubox and ubus
+      - name: Build libubox, ubus, uci
         run: PREFIX="$HOME/deps" tools/ci/build-host-deps.sh
 
       - name: Run tests
         run: PREFIX="$HOME/deps" tools/ci/run-host-tests.sh
+
+      - name: Daemon integration test (two APs, fake hostapd)
+        run: PREFIX="$HOME/deps" tools/ci/run-integration-test.sh

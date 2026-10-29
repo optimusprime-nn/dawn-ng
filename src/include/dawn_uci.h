@@ -8,6 +8,9 @@
  * Init uci. Call this function before using the other functions!
  * @return if call was successful.
  */
+/* UCI config directory to use instead of /etc/config (NULL = default); set before uci_init() */
+extern const char *dawn_uci_confdir;
+
 int uci_init();
 
 /**

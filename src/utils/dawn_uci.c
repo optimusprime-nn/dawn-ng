@@ -567,6 +567,8 @@ int uci_reset()
     return 0;
 }
 
+const char *dawn_uci_confdir = NULL;
+
 int uci_init() {
     dawnlog_debug_func("Entering...");
 
@@ -576,6 +578,15 @@ int uci_init() {
         ctx = uci_alloc_context();
         dawn_regmem(ctx);
         uci_ctx = ctx;
+
+        if (dawn_uci_confdir) {
+            // Used by tests to run several instances side by side. Keep
+            // uncommitted changes next to the config, not in shared /tmp/.uci.
+            char savedir[256];
+            snprintf(savedir, sizeof(savedir), "%s/.uci-save", dawn_uci_confdir);
+            uci_set_confdir(ctx, dawn_uci_confdir);
+            uci_set_savedir(ctx, savedir);
+        }
 
         ctx->flags &= ~UCI_FLAG_STRICT;
     } else {

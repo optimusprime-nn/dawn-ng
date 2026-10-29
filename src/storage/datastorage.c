@@ -573,9 +573,16 @@ int kick_clients(struct dawn_mac bssid_mac, uint32_t id) {
                     dawn_metric.min_number_to_kick);
             }
             else {
+                time_t now = dawn_stats_clock();
+                int gentle = kick_type == 1 && stats_client_in_backoff(j->client_addr, now);
                 float rx_rate, tx_rate;
-                bool have_bandwidth_iwinfo = get_bandwidth_iwinfo(j->client_addr, &rx_rate, &tx_rate);
-                if (!have_bandwidth_iwinfo && dawn_metric.bandwidth_threshold > 0) {
+                bool have_bandwidth_iwinfo = false;
+
+                if (gentle && !stats_gentle_due(j->client_addr, now)) {
+                    // In backoff and asked recently: don't nag it every evaluation
+                    dawnlog_info("Client " MACSTR ": in steering backoff, asked recently - not asking again yet\n", MAC2STR(j->client_addr.u8));
+                }
+                else if (!(have_bandwidth_iwinfo = get_bandwidth_iwinfo(j->client_addr, &rx_rate, &tx_rate)) && dawn_metric.bandwidth_threshold > 0) {
                     dawn_stats.kicks_skipped_active++;
                     dawnlog_info("Client " MACSTR ": No active transmission data for client. Don't kick!\n", MAC2STR(j->client_addr.u8));
                 }
@@ -604,14 +611,7 @@ int kick_clients(struct dawn_mac bssid_mac, uint32_t id) {
                                 dawnlog_info("Kicking NR entry: " NR_MACSTR ", score=%d\n", NR_MAC2STR(n->nr_ap->neighbor_report), n->score);
                         }
 
-                        time_t now = dawn_stats_clock();
-                        int gentle = kick_type == 1 && stats_client_in_backoff(j->client_addr, now);
-
-                        if (gentle && !stats_gentle_due(j->client_addr, now)) {
-                            // In backoff and asked recently: don't nag it every evaluation
-                            dawnlog_info("Client " MACSTR ": in steering backoff, asked recently - not asking again yet\n", MAC2STR(j->client_addr.u8));
-                        }
-                        else {
+                        {
                             // here we should send a messsage to set the probe.count for all aps to the min that there is no delay between switching
                             // the hearing map is full...
                             send_set_probe(j->client_addr);
