@@ -253,7 +253,8 @@ static void client_read_cb(struct ustream *s, int bytes) {
             if (dawn_auth_enabled()) {
                 const char *reason = NULL;
                 size_t payload_len = 0;
-                const char *payload = dawn_auth_unwrap(body, body_len, time(0), &payload_len, &reason);
+                bool encrypted = body_len >= DAWN_AUTH_MAGIC_LEN && memcmp(body, DAWN_ENC_MAGIC, DAWN_AUTH_MAGIC_LEN) == 0;
+                char *payload = dawn_auth_unwrap(body, body_len, time(0), &payload_len, &reason);
 
                 if (!payload) {
                     dawn_stats.peer_msgs_rejected_auth++;
@@ -261,7 +262,9 @@ static void client_read_cb(struct ustream *s, int bytes) {
                     goto process_done;
                 }
 
-                body = (char *)payload;
+                body = payload;
+                if (encrypted)
+                    dawn_stats.peer_msgs_encrypted++;
                 body_len = payload_len;
                 authenticated = true;
             }

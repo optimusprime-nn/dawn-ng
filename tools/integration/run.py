@@ -15,6 +15,9 @@ Checked, end to end:
     transition request naming that AP, and the move is recorded
   * a client that keeps rejecting requests is backed off and then only gets
     friendly requests (no disassociation)
+  * with encrypt_peers on (AP A), what goes over the wire is AES-GCM
+    ciphertext that decrypts (independently, in Python) to DAWN's JSON, and
+    an AP without encryption (AP B) still interoperates
   * messages with the wrong key are rejected, and malformed peer messages
     (src/test/malformed_msgs.txt) don't crash the daemon
   * the daemons shut down cleanly, with no sanitizer reports
@@ -32,7 +35,13 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+
+try:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+except ImportError:  # the wire check then only looks for plaintext
+    AESGCM = None
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -80,7 +89,8 @@ config network
 	option broadcast_port '{bport}'
 	option use_symm_enc '0'
 	option auth_key '{key}'
-	option accept_config_push 'none'
+	option accept_config_push '0'
+	option encrypt_peers '{encrypt}'
 	option collision_domain '-1'
 	option bandwidth '-1'
 
@@ -137,7 +147,7 @@ config metric '802_11a'
 
 
 class AP:
-    def __init__(self, args, base, name, ifname, bssid, freq, port, peer_ports, key=AUTH_KEY):
+    def __init__(self, args, base, name, ifname, bssid, freq, port, peer_ports, key=AUTH_KEY, encrypt=0):
         self.args, self.name, self.ifname, self.bssid, self.freq, self.port = args, name, ifname, bssid, freq, port
         self.dir = os.path.join(base, name)
         self.sock = os.path.join(self.dir, "ubus.sock")
@@ -147,7 +157,7 @@ class AP:
         os.makedirs(os.path.join(self.dir, "config"))
         os.makedirs(os.path.join(self.dir, "hostapd"))
         with open(os.path.join(self.dir, "config", "dawn"), "w") as f:
-            f.write(DAWN_CONFIG.format(port=port, bport=port + 1000, key=key,
+            f.write(DAWN_CONFIG.format(port=port, bport=port + 1000, key=key, encrypt=encrypt,
                                        hostapd_dir=os.path.join(self.dir, "hostapd")))
         # DAWN finds hostapd interfaces by their control sockets
         self.ctrl = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
@@ -259,8 +269,66 @@ def send_raw(port, data):
         s.close()
 
 
+class Sniffer:
+    """A fake peer: AP A connects to it like to any other AP. Records frames."""
+
+    def __init__(self, port):
+        self.frames = []
+        self.srv = socket.socket()
+        self.srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.srv.bind(("127.0.0.1", port))
+        self.srv.listen(4)
+        self.srv.settimeout(0.5)
+        self.stop = False
+        self.t = threading.Thread(target=self.loop, daemon=True)
+        self.t.start()
+
+    def loop(self):
+        while not self.stop:
+            try:
+                c, _ = self.srv.accept()
+            except OSError:
+                continue
+            threading.Thread(target=self.read, args=(c,), daemon=True).start()
+
+    def read(self, c):
+        buf = b""
+        c.settimeout(0.5)
+        while not self.stop:
+            try:
+                d = c.recv(65536)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            if not d:
+                break
+            buf += d
+            while len(buf) >= 4:
+                n = int.from_bytes(buf[:4], "big")
+                if n < 4 or len(buf) < n:
+                    break
+                self.frames.append(buf[4:n])
+                buf = buf[n:]
+        c.close()
+
+    def messages(self):
+        return [f for f in self.frames if f not in (b"ping\0", b"pong\0")]
+
+    def close(self):
+        self.stop = True
+        self.srv.close()
+
+
+def gcm_decrypt(frame, auth_key_hex):
+    import hmac as _h, hashlib as _hl
+    key = _h.new(bytes.fromhex(auth_key_hex), b"DAWN peer encryption v1", _hl.sha256).digest()
+    return AESGCM(key).decrypt(frame[12:24], frame[24:], frame[:12])
+
+
 def run(args, base):
-    A = AP(args, base, "ap-a", "wlan-a", "02:00:00:00:0a:01", 2437, 21026, [21027])
+    sniffer = Sniffer(21099)
+    A = AP(args, base, "ap-a", "wlan-a", "02:00:00:00:0a:01", 2437, 21026, [21027, 21099], encrypt=1)
     B = AP(args, base, "ap-b", "wlan-b", "02:00:00:00:0b:01", 2437, 21027, [21026])
     aps = [A, B]
     try:
@@ -273,6 +341,28 @@ def run(args, base):
             return any(other.bssid.upper() in (k.upper() for k in ssid.keys()) for ssid in net.values())
         check(wait_for(lambda: sees(A, B) and sees(B, A), 30), "APs discover each other (umdns + authenticated TCP)")
         check(stats(A).get("peer_auth") is True, "peer authentication is on")
+
+        # --- 1b. Encryption: A encrypts, B only authenticates; they still interoperate
+        check(stats(A).get("peer_encryption") is True and stats(B).get("peer_encryption") is False,
+              "encryption on for AP A only")
+        check(wait_for(lambda: stats(B).get("peers", {}).get("messages_encrypted", 0) > 0, 15),
+              "AP B accepts AP A's encrypted messages")
+        check(stats(A).get("peers", {}).get("messages_encrypted", 1) == 0 and
+              stats(A).get("peers", {}).get("messages_received", 0) > 0,
+              "AP A accepts AP B's authenticated-only messages")
+        msgs = wait_for(lambda: sniffer.messages(), 15)
+        check(bool(msgs) and all(m.startswith(b"DWE1") for m in msgs), f"AP A sends only encrypted frames ({len(msgs or [])} seen)")
+        check(bool(msgs) and not any(b"TestNet" in m or b"wlan-a" in m for m in msgs), "no plaintext on the wire")
+        if AESGCM and msgs:
+            try:
+                plain = gcm_decrypt(msgs[0], AUTH_KEY)
+                ok = plain.endswith(b"\0") and "method" in json.loads(plain[:-1])
+            except Exception as e:
+                print("  decrypt:", e)
+                ok = False
+            check(ok, "ciphertext decrypts (independent AES-GCM implementation) to DAWN's JSON")
+        else:
+            print("skip independent decryption check (python3 cryptography not installed)")
 
         # --- 2. Steering: a client hears B much better than A
         good = "3c:22:fb:00:00:01"
@@ -345,12 +435,23 @@ def run(args, base):
                 break
         time.sleep(1)
         check(A.alive() and stats(A).get("uptime") is not None, f"survives {sent} malformed authenticated peer messages")
+        if AESGCM:
+            before = stats(A).get("peers", {}).get("messages_encrypted", 0)
+            n = 0
+            for label, payload in peertest.load(peertest.DEFAULT_FILE):
+                if b'"method":"uci"' in payload.replace(b" ", b""):
+                    continue
+                send_raw(A.port, peertest.frame(payload, bytes.fromhex(AUTH_KEY), encrypt=True))
+                n += 1
+            got = wait_for(lambda: stats(A).get("peers", {}).get("messages_encrypted", 0) - before >= n, 10)
+            check(bool(got) and A.alive(), f"decrypts {n} messages encrypted by an independent AES-GCM implementation, survives them")
         check(wait_for(lambda: sees(A, B), 15), "still talking to the other AP afterwards")
         for method in ("get_network", "get_hearing_map", "get_stats"):
             check(A.call("dawn", method, raw=True)[1], f"{method} still returns valid JSON")
 
     finally:
         codes = {ap.name: ap.stop() for ap in aps}
+        sniffer.close()
 
     for ap in aps:
         check(codes[ap.name] == 0, f"{ap.name}: dawn exits cleanly on SIGTERM (exit {codes[ap.name]})")

@@ -249,11 +249,14 @@ static const char *ssid_table_name(const uint8_t *ssid) {
 void apply_peer_auth_config(const struct network_config_s *cfg) {
     snprintf(network_config.auth_key, sizeof(network_config.auth_key), "%s", cfg->auth_key);
     network_config.accept_config_push = cfg->accept_config_push;
+    network_config.encrypt_peers = cfg->encrypt_peers;
+    dawn_auth_set_encrypt(cfg->encrypt_peers != 0);
 
     switch (dawn_auth_set_key(cfg->auth_key)) {
     case DAWN_AUTH_KEY_SET:
         if (network_config.network_option == 2 || network_config.network_option == 3)
-            dawnlog_always("Peer messages are authenticated (auth_key set)\n");
+            dawnlog_always("Peer messages are %s (auth_key set)\n",
+                    cfg->encrypt_peers ? "encrypted and authenticated" : "authenticated");
         else
             dawnlog_warning("auth_key is only supported with TCP networking (network_option 2 or 3); "
                     "UDP messages are NOT authenticated\n");
@@ -263,6 +266,8 @@ void apply_peer_auth_config(const struct network_config_s *cfg) {
         break;
     case DAWN_AUTH_KEY_NONE:
     default:
+        if (cfg->encrypt_peers)
+            dawnlog_error("encrypt_peers needs an auth_key; peer messages are NOT encrypted\n");
         dawnlog_warning("No auth_key set: any device that can reach the DAWN port can inject data%s\n",
                 cfg->accept_config_push == ACCEPT_CONFIG_PUSH_ANY ? " and rewrite this AP's DAWN configuration" : "");
         break;
@@ -1699,6 +1704,7 @@ static int get_stats(struct ubus_context *ctx_local, struct ubus_object *obj,
 
     blobmsg_add_u32(&b, "uptime", (uint32_t)(now - dawn_stats.started));
     blobmsg_add_u8(&b, "peer_auth", dawn_auth_enabled());
+    blobmsg_add_u8(&b, "peer_encryption", dawn_auth_encrypting());
 
     // Kick records are written under client_array_mutex
     dawn_mutex_lock(&client_array_mutex);
@@ -1723,6 +1729,7 @@ static int get_stats(struct ubus_context *ctx_local, struct ubus_object *obj,
     t = blobmsg_open_table(&b, "peers");
     blobmsg_add_u32(&b, "messages_received", dawn_stats.peer_msgs_received);
     blobmsg_add_u32(&b, "messages_rejected_auth", dawn_stats.peer_msgs_rejected_auth);
+    blobmsg_add_u32(&b, "messages_encrypted", dawn_stats.peer_msgs_encrypted);
     blobmsg_add_u32(&b, "config_push_applied", dawn_stats.config_push_applied);
     blobmsg_add_u32(&b, "config_push_ignored", dawn_stats.config_push_ignored);
     blobmsg_close_table(&b, t);

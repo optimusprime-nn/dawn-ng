@@ -96,6 +96,11 @@ def t_setup_check_healthy(b):
     check("Connected to 1 access point(s) on other devices" in t, "peer counted by BSSID")
     p.page.click("button:has-text('Show key')")
     check(p.page.inner_text("code") == "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff", "key revealed")
+    check("not encrypted" in t, "encryption suggested (info, summary stays all good)")
+    p.page.click("button:has-text('Encrypt')")
+    p.page.wait_for_timeout(1500)
+    enc = [v.get("encrypt_peers") for v in uci_sets(p.writes(), "dawn").values() if "encrypt_peers" in v]
+    check(enc == ["1"], f"encryption turned on: {enc}")
     return p
 
 
@@ -113,6 +118,7 @@ def t_steering_page(b):
 def t_settings_preset_and_key(b):
     p = Page(b, "network/dawn")
     check(p.page.evaluate("!!document.querySelector('[id$=\"global.steer_backoff\"]')"), "steer backoff option present")
+    check(p.page.evaluate("!!document.querySelector('[id*=\"encrypt_peers\"]')"), "encryption option present")
     check(p.page.evaluate("document.querySelector('details') && !document.querySelector('details').open"),
           "advanced settings collapsed")
     check(p.page.evaluate("document.querySelector('select[id$=\"global._preset\"]').value") == "balanced",

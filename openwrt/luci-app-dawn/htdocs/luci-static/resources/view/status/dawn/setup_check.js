@@ -287,12 +287,21 @@ function evaluate(state) {
 		});
 	}
 	else {
+		const encrypted = String(cfg.encrypt_peers) == '1';
 		checks.push({
 			id: 'auth', status: 'ok',
-			title: _('Messages between access points are authenticated'),
+			title: encrypted ? _('Messages between access points are authenticated and encrypted')
+				: _('Messages between access points are authenticated'),
 			detail: _('Every access point must use this same key. Messages from devices without it are ignored.'),
 			fix: { type: 'reveal', label: _('Show key'), value: key }
 		});
+		if (!encrypted)
+			checks.push({
+				id: 'encrypt', status: 'info',
+				title: _('Messages between access points are not encrypted'),
+				detail: _('They are authenticated, but anyone watching your network can read them (client addresses, signal levels). Turn on encryption once every access point runs this DAWN version; they can be switched one at a time.'),
+				fix: { type: 'action', action: 'enableEncryption', label: _('Encrypt') }
+			});
 	}
 
 	/* 10. What DAWN has actually done (needs get_stats) */
@@ -451,6 +460,7 @@ return view.extend({
 						use_symm_enc: net.use_symm_enc,
 						auth_key: net.auth_key,
 						accept_config_push: net.accept_config_push,
+						encrypt_peers: net.encrypt_peers,
 						loglevel: local.loglevel,
 						kicking: metric.kicking,
 						steering_ssid: Array.isArray(steering) ? steering : (steering ? [ steering ] : [])
@@ -497,6 +507,13 @@ return view.extend({
 		else
 			uci.set('dawn', uci.add('dawn', 'network'), 'auth_key', key);
 
+		return this.applyChanges();
+	},
+
+	enableEncryption: function() {
+		const sid = uci.get_first('dawn', 'network');
+		if (sid)
+			uci.set('dawn', sid['.name'], 'encrypt_peers', '1');
 		return this.applyChanges();
 	},
 

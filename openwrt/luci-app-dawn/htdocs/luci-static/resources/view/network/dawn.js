@@ -223,6 +223,10 @@ return view.extend({
 		o.write = function() {};
 		o.remove = function() {};
 
+		o = s.option(form.Flag, 'encrypt_peers', _('Encrypt traffic between APs'),
+			_('Also hides what the access points tell each other (client addresses, signal levels) from anyone watching the network. Needs the shared key. Access points with this DAWN version accept both encrypted and unencrypted messages, so you can switch them one at a time; older DAWN builds can\'t read encrypted messages.'));
+		o.rmempty = true;
+
 		o = s.option(form.ListValue, 'accept_config_push', _('Accept settings from other APs'),
 			_('When you change DAWN settings on one AP, it sends them to the others.'));
 		o.value('2', _('Only with shared key (default)'));

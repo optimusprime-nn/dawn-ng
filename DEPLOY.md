@@ -236,6 +236,10 @@ The page now starts with the two things most people need:
   - **Shared key**: click **Generate new key**, then **Save & Apply**. Enter
     the **same key** on every other AP; copy it from Setup Check's
     **Show key**.
+  - **Encrypt traffic between APs**: also hides what the APs tell each
+    other (client addresses, signal levels) from anyone on the network.
+    Turn it on once every AP runs this build; APs can be switched one at a
+    time.
   - **Accept settings from other APs**: the default only applies settings
     pushed by APs that have the key.
 
@@ -291,6 +295,8 @@ key=$(hexdump -n 32 -e '32/1 "%02x"' /dev/urandom); echo "$key"
 uci set dawn.@network[0].auth_key="$key" && uci commit dawn && service dawn reload
 # ...and set the same value on every other AP:
 #   uci set dawn.@network[0].auth_key=<that key> && uci commit dawn && service dawn reload
+# Optional, once every AP runs this build: encrypt what they send each other
+#   uci set dawn.@network[0].encrypt_peers=1 && uci commit dawn && service dawn reload
 
 # Make sure steering is on (0 = off, 3 = both methods, the default)
 uci set dawn.global.kicking=3 && uci commit dawn && service dawn reload
@@ -368,6 +374,12 @@ unpatched DAWN.
 3. From a PC: `python3 tools/dawn-peer-test.py 192.168.1.1` (no key) must
    not change **Network Overview**. With `--auth-key <key>` a made-up AP
    `11:22:33:44:55:66` appears there for a few minutes.
+4. Encryption: turn on **Encrypt traffic between APs** on one AP. Setup
+   Check there says **authenticated and encrypted**; the other APs stay
+   connected, and `ubus call dawn get_stats` on them shows
+   `messages_encrypted` rising. Then turn it on everywhere.
+   (`dawn-peer-test.py --auth-key <key> --encrypt` sends encrypted test
+   messages; needs `pip install cryptography`.)
 
 ### C. Band steering on one router
 
