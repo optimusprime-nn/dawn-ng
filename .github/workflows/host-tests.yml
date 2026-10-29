@@ -27,4 +27,10 @@ jobs:
         run: PREFIX="$HOME/deps" tools/ci/run-host-tests.sh
 
       - name: Daemon integration test (two APs, fake hostapd)
-        run: PREFIX="$HOME/deps" tools/ci/run-integration-test.sh
+        run: |
+          set -o pipefail
+          PREFIX="$HOME/deps" tools/ci/run-integration-test.sh 2>&1 | tee "$RUNNER_TEMP/it.log" || {
+            # Also as an annotation: readable through the API without log access
+            tail -c 20000 "$RUNNER_TEMP/it.log" | python3 -c 'import sys; d=sys.stdin.read(); print("::error title=Integration test failed::" + d.replace("%","%25").replace("\r","%0D").replace("\n","%0A"))'
+            exit 1
+          }
