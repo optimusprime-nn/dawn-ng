@@ -126,6 +126,26 @@ void stats_kick(time_t now, int method, struct dawn_mac client, struct dawn_mac 
 }
 
 void stats_client_seen(struct dawn_mac client, struct dawn_mac bssid, time_t now) {
+    // Watch the last move: did the client come back, or did it stick?
+    struct client_steering *w = client_find(client);
+    if (w && w->moved_at) {
+        if (mac_is_equal_bb(bssid, w->moved_from)) {
+            if (now - w->moved_at >= STATS_BOUNCE_GRACE) {
+                if (now - w->moved_at <= STATS_BOUNCE_WINDOW) {
+                    if (w->bounced < UINT16_MAX)
+                        w->bounced++;
+                    w->last_seen = now;
+                    client_miss(w, now);
+                }
+                w->moved_at = 0;
+            }
+        }
+        else if (now - w->moved_at > STATS_BOUNCE_WINDOW) {
+            client_hit(w); // the move stuck
+            w->moved_at = 0;
+        }
+    }
+
     for (int i = 0; i < dawn_stats.recent_count; i++) {
         struct kick_record *r = &dawn_stats.recent[i];
 
@@ -140,7 +160,9 @@ void stats_client_seen(struct dawn_mac client, struct dawn_mac bssid, time_t now
             struct client_steering *c = client_get(client, now);
             if (c->moved < UINT16_MAX)
                 c->moved++;
-            client_hit(c);
+            // Only a success once it sticks (see stats_client_seen above)
+            c->moved_from = r->from;
+            c->moved_at = now;
         }
         else if (now - r->time >= STATS_STAY_TIMEOUT) {
             r->outcome = KICK_OUTCOME_STAYED;
@@ -175,8 +197,8 @@ void stats_btm_response(struct dawn_mac client, int status_code, time_t now) {
 
     struct client_steering *c = client_get(client, now);
     if (status_code == 0) {
+        // Not a success yet: some clients accept, move, and come straight back
         dawn_stats.btm_accepted++;
-        client_hit(c);
     }
     else {
         dawn_stats.btm_rejected++;
