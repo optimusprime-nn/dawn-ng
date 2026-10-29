@@ -56,11 +56,13 @@ struct kick_record {
 
 /*
  * Per-client steering history, so DAWN can stop disrupting clients that do
- * not follow its requests. A "miss" is a request the client rejected, or a
- * kick after which it was found back on the same AP. After
- * steer_max_misses consecutive misses the client is in backoff for
- * steer_backoff seconds: it only gets friendly requests (no forced
- * disassociation). A successful move or an accepted request resets it.
+ * not follow its requests. A "miss" is a request the client rejected, a
+ * kick after which it stayed on the same AP, or a move after which it came
+ * straight back (within STATS_BOUNCE_WINDOW - otherwise it ping-pongs:
+ * moved, back, kicked again, ...). After steer_max_misses consecutive
+ * misses the client is in backoff for steer_backoff seconds: it only gets
+ * friendly requests (no forced disassociation). A move that sticks for
+ * STATS_BOUNCE_WINDOW resets it.
  */
 #define STATS_TRACKED_CLIENTS 128
 
@@ -71,10 +73,19 @@ struct client_steering {
     uint16_t moved;
     uint16_t stayed;
     uint16_t rejected;
+    uint16_t bounced;               // moved, then came back within STATS_BOUNCE_WINDOW
     uint8_t misses;                 // consecutive
     time_t backoff_until;
     time_t last_gentle;             // last friendly request while in backoff
+    struct dawn_mac moved_from;     // last move, until it stuck or bounced
+    time_t moved_at;                // 0 = no move being watched
 };
+
+// A move only counts as a success if the client doesn't return to the AP it
+// was moved away from within this time. Sightings on the old AP in the first
+// STATS_BOUNCE_GRACE seconds are ignored (reports from before the move).
+#define STATS_BOUNCE_WINDOW 600
+#define STATS_BOUNCE_GRACE 20
 
 // While in backoff, at most one friendly request per client this often
 #define STATS_GENTLE_INTERVAL 300
