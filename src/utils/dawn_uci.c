@@ -223,8 +223,11 @@ static struct uci_section *uci_find_metric_section(const char *name) {
 
     uci_foreach_element(&uci_pkg->sections, e) {
         s = uci_to_section(e);
+        // name == NULL looks for the first anonymous section. This used to
+        // fall through to strcmp(e->name, NULL) on a named section, crashing
+        // DAWN at startup when the config had no 'global' metric section.
         if (strcmp(s->type, "metric") == 0 &&
-            ((!name && s->anonymous) || strcmp(e->name, name) == 0)) {
+            (name ? strcmp(e->name, name) == 0 : s->anonymous)) {
             return s;
         }
     }
@@ -464,7 +467,7 @@ bool uci_get_dawn_hostapd_dir() {
             // CONFIG-H: hostapd_dir|Path to hostapd runtime information|[/var/run/hostapd]
             const char* str = uci_lookup_option_string(uci_ctx, s, "hostapd_dir");
             if (str)
-                strncpy(hostapd_dir_glob, str, HOSTAPD_DIR_LEN);
+                snprintf(hostapd_dir_glob, HOSTAPD_DIR_LEN, "%s", str);
 
             return true;
         }

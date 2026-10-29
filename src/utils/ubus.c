@@ -1375,7 +1375,9 @@ static void ubus_umdns_cb(struct ubus_request *req, int type, struct blob_attr *
     if (!msg)
         return;
 
-    blobmsg_parse(dawn_umdns_table_policy, __DAWN_UMDNS_MAX, tb, blob_data(msg), blob_len(msg));
+    // (Was parsed with __DAWN_UMDNS_MAX = 2 into this 1-entry array and
+    // 1-entry policy: a stack overflow on every umdns browse.)
+    blobmsg_parse(dawn_umdns_table_policy, __DAWN_UMDNS_TABLE_MAX, tb, blob_data(msg), blob_len(msg));
 
     if (!tb[DAWN_UMDNS_TABLE]) {
         return;
@@ -1398,7 +1400,9 @@ static void ubus_umdns_cb(struct ubus_request *req, int type, struct blob_attr *
             dawnlog_debug("IPV4: %s\n", blobmsg_get_string(tb_dawn[DAWN_UMDNS_IPV4]));
             dawnlog_debug("Port: %d\n", blobmsg_get_u32(tb_dawn[DAWN_UMDNS_PORT]));
         } else {
-            return; // TODO: We're in a loop. Should this be return or continue?
+            // Skip just this entry (e.g. an IPv6-only announcement). This used
+            // to return, so every peer listed after it was never connected to.
+            continue;
         }
         add_tcp_connection(blobmsg_get_string(tb_dawn[DAWN_UMDNS_IPV4]), blobmsg_get_u32(tb_dawn[DAWN_UMDNS_PORT]));
     }
