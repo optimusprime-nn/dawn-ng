@@ -23,7 +23,8 @@ function fmtDuration(s) {
 const METHOD = {
 	rssi_compare: [ _('Better AP'), _('Another AP scored clearly higher (802.11v disassociation imminent)') ],
 	absolute_rssi: [ _('Weak signal'), _('Signal fell below rssi_center (802.11v BSS transition request)') ],
-	force_reconnect: [ _('Reconnect'), _('No information about the client: deauthenticated so it reconnects') ]
+	force_reconnect: [ _('Reconnect'), _('No information about the client: deauthenticated so it reconnects') ],
+	gentle: [ _('Gentle'), _('The client keeps ignoring steering, so it only gets a friendly request (no forced disconnect) during its backoff') ]
 };
 
 const OUTCOME = {
@@ -77,7 +78,10 @@ return view.extend({
 				E('td', { 'class': 'td' }, [
 					E('span', { 'class': 'label ' + o[0],
 						'style': k.outcome == 'failed' ? 'background-color:var(--error-color-high, #c9302c); color:#fff' : null }, o[1]),
-					(k.outcome_after != null && k.outcome != 'failed') ? ' ' + _('after %ds').format(k.outcome_after) : ''
+					(k.outcome_after != null && k.outcome != 'failed') ? ' ' + _('after %ds').format(k.outcome_after) : '',
+					k.response ? E('div', { 'style': 'opacity:.75; font-size:90%' },
+						k.response == 'accepted' ? _('client accepted the request')
+							: _('client rejected the request (status %d)').format(k.response_status)) : ''
 				])
 			]);
 		});
@@ -112,6 +116,36 @@ return view.extend({
 					])
 				].concat(rows))
 				: E('em', {}, _('No clients have been steered yet. That is normal until a client has a clearly better access point available.')),
+
+			E('h3', { 'style': 'margin-top:1em' }, _('Client behaviour')),
+			E('p', { 'class': 'cbi-section-descr' },
+				_('Clients that ignore or reject steering, or come straight back to the same access point, are not forced off again for a while: they only get friendly requests (see steer_max_misses / steer_backoff).')),
+			(stats.clients || []).length
+				? E('table', { 'class': 'table' }, [
+					E('tr', { 'class': 'tr table-titles' }, [
+						E('th', { 'class': 'th' }, _('Client')),
+						E('th', { 'class': 'th' }, _('Requests')),
+						E('th', { 'class': 'th' }, _('Moved')),
+						E('th', { 'class': 'th' }, _('Stayed')),
+						E('th', { 'class': 'th' }, _('Rejected')),
+						E('th', { 'class': 'th' }, _('Status'))
+					])
+				].concat((stats.clients || []).slice().sort(function(a, b) {
+					return (b.backoff_remaining || 0) - (a.backoff_remaining || 0) || b.requests - a.requests;
+				}).map(function(c) {
+					return E('tr', { 'class': 'tr' }, [
+						E('td', { 'class': 'td' }, dawn.getHostnameFromMAC(hosts, c.client)),
+						E('td', { 'class': 'td' }, String(c.requests)),
+						E('td', { 'class': 'td' }, String(c.moved)),
+						E('td', { 'class': 'td' }, String(c.stayed)),
+						E('td', { 'class': 'td' }, String(c.rejected)),
+						E('td', { 'class': 'td' }, c.backoff_remaining
+							? E('span', { 'class': 'label warning', 'title': _('Only friendly requests until the backoff ends') },
+								_('Backing off, %dm left').format(Math.ceil(c.backoff_remaining / 60)))
+							: (c.misses ? _('%d recent miss(es)').format(c.misses) : E('span', { 'class': 'label success' }, _('Follows steering'))))
+					]);
+				})))
+				: E('em', {}, _('No clients have been steered yet.')),
 
 			E('h3', { 'style': 'margin-top:1em' }, _('Messages from other access points')),
 			E('div', { 'style': 'display:flex; flex-wrap:wrap; gap:.6em' }, [

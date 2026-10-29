@@ -105,11 +105,14 @@ def t_steering_page(b):
     check("Steering requests sent" in t and "86%" in t, "steering tiles")
     check("pixel-8 (3C:22:FB:10:20:30)" in t, "client hostname from host hints")
     check("Failed" in t.title() or "FAILED" in t, "failed outcome shown")
+    check("backing off, 45m left" in t.lower() and "follows steering" in t.lower(), "client behaviour table")
+    check("gentle" in t.lower() and "rejected the request (status 6)" in t, "gentle kick + BTM response shown")
     return p
 
 
 def t_settings_preset_and_key(b):
     p = Page(b, "network/dawn")
+    check(p.page.evaluate("!!document.querySelector('[id$=\"global.steer_backoff\"]')"), "steer backoff option present")
     check(p.page.evaluate("document.querySelector('details') && !document.querySelector('details').open"),
           "advanced settings collapsed")
     check(p.page.evaluate("document.querySelector('select[id$=\"global._preset\"]').value") == "balanced",

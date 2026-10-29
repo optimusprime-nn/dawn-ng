@@ -69,6 +69,11 @@ def build(dawn_config_path, variant):
         {'age': 1260, 'client': 'F0:99:B6:44:55:66', 'from': 'AA:AA:AA:AA:AA:02', 'to': 'BB:BB:BB:BB:BB:01', 'method': 'absolute_rssi', 'outcome': 'moved', 'outcome_after': 4},
         {'age': 2405, 'client': '00:1A:11:22:33:44', 'from': 'AA:AA:AA:AA:AA:01', 'to': 'AA:AA:AA:AA:AA:02', 'method': 'rssi_compare', 'score_gain': 22, 'outcome': 'stayed', 'outcome_after': 60},
         {'age': 3900, 'client': 'A4:83:E7:01:02:03', 'from': 'AA:AA:AA:AA:AA:01', 'to': 'AA:AA:AA:AA:AA:02', 'method': 'rssi_compare', 'score_gain': 28, 'outcome': 'failed', 'outcome_after': 0},
+        {'age': 4100, 'client': '00:1A:11:22:33:44', 'from': 'AA:AA:AA:AA:AA:01', 'to': 'AA:AA:AA:AA:AA:02', 'method': 'gentle', 'outcome': 'stayed', 'outcome_after': 60, 'response': 'rejected', 'response_status': 6},
+      ],
+      'clients': [
+        {'client': '3C:22:FB:10:20:30', 'requests': 1, 'moved': 1, 'stayed': 0, 'rejected': 0, 'misses': 0, 'backoff_remaining': 0},
+        {'client': '00:1A:11:22:33:44', 'requests': 3, 'moved': 0, 'stayed': 2, 'rejected': 1, 'misses': 3, 'backoff_remaining': 2700},
       ]}
     hosts = {'3C:22:FB:10:20:30': {'name': 'pixel-8'}, 'F0:99:B6:44:55:66': {'name': 'macbook'}}
 

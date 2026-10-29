@@ -80,6 +80,17 @@ value then a "soft" kick is done, which asks the device to look at other APs
 but does not enforce this through a disconnection. Forced disconnection would be disruptive to legacy clients that may not be able to find a suitable AP to
 connect to.
 
+### Stubborn clients
+Some clients ignore 802.11v requests, reject them, or come straight back to
+the AP they were sent away from. Forcing them off over and over just causes
+dropouts. After `steer_max_misses` such outcomes in a row (default 2) DAWN
+backs off from that client for `steer_backoff` seconds (default 3600): it
+only sends a friendly BSS transition request (no disassociation, no
+"don't come back" timer), at most once every 5 minutes. The client's next
+successful move, or an accepted request, ends the backoff. Set
+`steer_max_misses` to 0 to always force. The LuCI Steering page shows each
+client's record and whether it is backing off.
+
 ### Other Features
 The following are less likely to need attention:
 - The way 802.11v Neighbor Reports are generated can be adjusted.
@@ -166,6 +177,8 @@ grep 'CONFIG-G:' `find . -type f -name "*.[ch]"`| sed 's/^.*CONFIG-.: *\(.*\)$/|
 |neighbors|Space separated list of MACS to use in "static" AP Neighbor Report| None|
 |rrm_mode|Preferred order for using Passive, Active or Table 802.11k BEACON information|[PAT] String of 'P', 'A' and / or 'T'|
 |set_hostapd_nr|Method used to set Neighbor Report on AP|[0 = Disabled]; 1 = "Static" based on all APs in network (plus set from configuration); 2 = "Dynamic" based on next nearest AP seen by current clients|
+|steer_backoff|Seconds a client that keeps ignoring steering only gets friendly (non-forcing) requests|[3600]|
+|steer_max_misses|Ignored, rejected or bounced-back steering requests in a row before backing off from a client|0 = Never back off; [2]|
 |use_station_count|Compare connected station counts when considering kicking|[0 = Disabled]; 1 = Enabled|
 
 ## Per Band Metric Parameters

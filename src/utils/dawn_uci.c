@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "dawn_stats.h"
 #include "memory_utils.h"
 #include "datastorage.h"
 #include "dawn_iwinfo.h"
@@ -276,6 +277,10 @@ struct probe_metric_s uci_get_dawn_metric() {
         .chan_util_avg_period = 3,
         // CONFIG-G: duration|802.11k BEACON request measurement duration (TUs), also used as the 802.11v BSS-TM disassociation_timer and validity_period.  Must not be 0 because some clients refuse a zero-length measurement, leaving DAWN with no BEACON REPORT data to steer on|[150]
         .duration = 150,
+        // CONFIG-G: steer_max_misses|Consecutive steering requests a client may ignore or reject (or return to the same AP after) before DAWN stops forcing it off: it then only gets friendly requests for steer_backoff seconds. 0 = never back off (old behaviour)|[2]
+        .steer_max_misses = 2,
+        // CONFIG-G: steer_backoff|Seconds a client that keeps ignoring steering only gets friendly requests (no forced disassociation)|[3600]
+        .steer_backoff = 3600,
         // CONFIG-G: rrm_mode|Preferred order for using Passive, Active or Table 802.11k BEACON information|[PAT] String of 'P', 'A' and / or 'T'
         .rrm_mode_mask = WLAN_RRM_CAPS_BEACON_REPORT_PASSIVE |
                          WLAN_RRM_CAPS_BEACON_REPORT_ACTIVE |
@@ -350,6 +355,8 @@ struct probe_metric_s uci_get_dawn_metric() {
         DAWN_SET_CONFIG_INT(ret, global_s, bandwidth_threshold);
         DAWN_SET_CONFIG_INT(ret, global_s, chan_util_avg_period);
         DAWN_SET_CONFIG_INT(ret, global_s, duration);
+        DAWN_SET_CONFIG_INT(ret, global_s, steer_max_misses);
+        DAWN_SET_CONFIG_INT(ret, global_s, steer_backoff);
         ret.rrm_mode_mask = parse_rrm_mode(ret.rrm_mode_order,
                                            uci_lookup_option_string(uci_ctx, global_s, "rrm_mode"));
         global_neighbors = uci_lookup_option(uci_ctx, global_s, "neighbors");
@@ -377,6 +384,8 @@ struct probe_metric_s uci_get_dawn_metric() {
     DAWN_SET_BANDS_CONFIG_INT(ret, global_s, band_s, low_rssi_val);
     DAWN_SET_BANDS_CONFIG_INT(ret, global_s, band_s, rssi_weight);
     DAWN_SET_BANDS_CONFIG_INT(ret, global_s, band_s, rssi_center);
+
+    stats_set_backoff_policy(ret.steer_max_misses, ret.steer_backoff);
     return ret;
 }
 

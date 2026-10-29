@@ -384,8 +384,10 @@ unpatched DAWN.
 
 Clients don't have to obey 802.11v requests: iPhones and recent Android
 devices usually do, some laptops and IoT devices ignore them. "Stayed" over
-and over for one device is that device's choice. Setup Check flags it when it
-happens across the board.
+and over for one device is that device's choice. After two misses in a row
+DAWN stops forcing that device for an hour and only asks nicely (method
+**Gentle**); the **Client behaviour** table on the Steering page shows this.
+Setup Check flags it when it happens across the board.
 
 ### D. Roaming between access points (needs 2+ APs)
 

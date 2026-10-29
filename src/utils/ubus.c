@@ -739,6 +739,39 @@ int send_blob_attr_via_network(struct blob_attr* msg, char* method) {
     return 0;
 }
 
+enum {
+    BTM_RESP_ADDRESS,
+    BTM_RESP_STATUS,
+    __BTM_RESP_MAX
+};
+
+static const struct blobmsg_policy btm_resp_policy[__BTM_RESP_MAX] = {
+    [BTM_RESP_ADDRESS] = {.name = "address", .type = BLOBMSG_TYPE_STRING},
+    [BTM_RESP_STATUS] = {.name = "status-code", .type = BLOBMSG_TYPE_INT8},
+};
+
+// hostapd 'bss-transition-response': whether a client accepted our request.
+static int handle_btm_response(struct blob_attr *msg) {
+    struct blob_attr *tb[__BTM_RESP_MAX];
+    struct dawn_mac client;
+
+    blobmsg_parse(btm_resp_policy, __BTM_RESP_MAX, tb, blob_data(msg), blob_len(msg));
+
+    if (!tb[BTM_RESP_ADDRESS] || !tb[BTM_RESP_STATUS] ||
+            hwaddr_aton(blobmsg_get_string(tb[BTM_RESP_ADDRESS]), client.u8))
+        return UBUS_STATUS_INVALID_ARGUMENT;
+
+    int status = blobmsg_get_u8(tb[BTM_RESP_STATUS]);
+    dawnlog_info("Client " MACSTR ": BSS transition response, status %d (%s)\n",
+            MAC2STR(client.u8), status, status == 0 ? "accepted" : "rejected");
+
+    dawn_mutex_lock(&client_array_mutex);
+    stats_btm_response(client, status, dawn_stats_clock());
+    dawn_mutex_unlock(&client_array_mutex);
+
+    return 0;
+}
+
 static int hostapd_notify(struct ubus_context* ctx_local, struct ubus_object* obj,
     struct ubus_request_data* req, const char* method,
     struct blob_attr* msg) {
@@ -783,6 +816,8 @@ static int hostapd_notify(struct ubus_context* ctx_local, struct ubus_object* ob
         ret = handle_deauth_req(b.head);
     } else if (strncmp(method, "beacon-report", 12) == 0) {
         ret = handle_beacon_rep(b.head);
+    } else if (strcmp(method, "bss-transition-response") == 0) {
+        ret = handle_btm_response(b.head);
     }
 
     blob_buf_free(&b);
@@ -1670,6 +1705,10 @@ static int get_stats(struct ubus_context *ctx_local, struct ubus_object *obj,
     blobmsg_add_u32(&b, "failed", dawn_stats.kicks_failed);
     blobmsg_add_u32(&b, "moved", dawn_stats.kicks_moved);
     blobmsg_add_u32(&b, "stayed", dawn_stats.kicks_stayed);
+    blobmsg_add_u32(&b, "sent_gentle", dawn_stats.kicks_sent[KICK_METHOD_GENTLE]);
+    blobmsg_add_u32(&b, "btm_accepted", dawn_stats.btm_accepted);
+    blobmsg_add_u32(&b, "btm_rejected", dawn_stats.btm_rejected);
+    blobmsg_add_u32(&b, "backoffs_started", dawn_stats.backoffs_started);
     blobmsg_close_table(&b, t);
 
     t = blobmsg_open_table(&b, "peers");
@@ -1697,6 +1736,28 @@ static int get_stats(struct ubus_context *ctx_local, struct ubus_object *obj,
         blobmsg_add_string(&b, "outcome", stats_outcome_name(r->outcome));
         if (r->outcome != KICK_OUTCOME_PENDING)
             blobmsg_add_u32(&b, "outcome_after", (uint32_t)(r->outcome_time - r->time));
+        if (r->btm_response != BTM_RESPONSE_NONE) {
+            blobmsg_add_string(&b, "response", r->btm_response == BTM_RESPONSE_ACCEPTED ? "accepted" : "rejected");
+            blobmsg_add_u32(&b, "response_status", r->btm_status);
+        }
+        blobmsg_close_table(&b, e);
+    }
+    blobmsg_close_array(&b, a);
+
+    // Per-client history, for clients DAWN has tried to steer
+    a = blobmsg_open_array(&b, "clients");
+    for (int i = 0; i < dawn_stats.client_count; i++) {
+        const struct client_steering *c = &dawn_stats.clients[i];
+        void *e = blobmsg_open_table(&b, NULL);
+
+        blobmsg_add_mac_string(&b, "client", c->client);
+        blobmsg_add_u32(&b, "requests", c->requests);
+        blobmsg_add_u32(&b, "moved", c->moved);
+        blobmsg_add_u32(&b, "stayed", c->stayed);
+        blobmsg_add_u32(&b, "rejected", c->rejected);
+        blobmsg_add_u32(&b, "misses", c->misses);
+        if (stats_client_in_backoff(c->client, now))
+            blobmsg_add_u32(&b, "backoff_remaining", (uint32_t)(c->backoff_until - now));
         blobmsg_close_table(&b, e);
     }
     blobmsg_close_array(&b, a);
@@ -2022,6 +2083,8 @@ int uci_send_via_network()
     blobmsg_add_u32(&b, "set_hostapd_nr", dawn_metric.set_hostapd_nr);
     blobmsg_add_u32(&b, "disassoc_nr_length", dawn_metric.disassoc_nr_length);
     blobmsg_add_u32(&b, "duration", dawn_metric.duration);
+    blobmsg_add_u32(&b, "steer_max_misses", dawn_metric.steer_max_misses);
+    blobmsg_add_u32(&b, "steer_backoff", dawn_metric.steer_backoff);
     blobmsg_add_string(&b, "rrm_mode", get_rrm_mode_string(dawn_metric.rrm_mode_order));
     band_table = blobmsg_open_table(&b, "band_metrics");
 

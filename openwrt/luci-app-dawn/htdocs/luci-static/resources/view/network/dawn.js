@@ -425,6 +425,20 @@ return view.extend({
 		);
 		o.placeholder = _('Default Value') + ': ' + '0';
 
+		o = s.option(form.Value, 'steer_max_misses',
+			_('Misses before backing off'),
+			_('How many steering requests in a row a client may ignore or reject (or come straight back from) before DAWN stops forcing it off and only asks nicely. 0 = never back off.'),
+		);
+		o.datatype = 'uinteger';
+		o.placeholder = _('Default Value') + ': ' + '2';
+
+		o = s.option(form.Value, 'steer_backoff',
+			_('Backoff time (s)'),
+			_('How long such a client only gets friendly requests (no forced disconnect).'),
+		);
+		o.datatype = 'uinteger';
+		o.placeholder = _('Default Value') + ': ' + '3600';
+
 		o = s.option(form.Flag, 'eval_assoc_req',
 			_('Evaluated Association Req'),
 			_('Control whether ASSOCIATION frames are evaluated for rejection'),
