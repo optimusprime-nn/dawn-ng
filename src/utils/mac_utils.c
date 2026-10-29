@@ -55,7 +55,7 @@ struct dawn_mac str2mac(char* s)
     struct dawn_mac tmp_mac = { .u8 = {0,0,0,0,0,0} };
 
     // Need to scanf to an array of ints as there is no byte format specifier
-    int tmp_int_mac[ETH_ALEN];
+    unsigned int tmp_int_mac[ETH_ALEN];
     if (sscanf(s, MACSTR, STR2MAC(tmp_int_mac)) == 6)
     {
         for (int i = 0; i < ETH_ALEN; ++i)
