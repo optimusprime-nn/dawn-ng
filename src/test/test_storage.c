@@ -37,13 +37,18 @@ int send_set_probe(struct dawn_mac client_addr)
     return 0;
 }
 
+// When set (the default), kick stubs fake the client moving to the
+// recommended AP. 'sim_moves 0' leaves that to the script, so the result of
+// the request looks like real hostapd success (0).
+static int simulate_moves = 1;
+
 int bss_transition_request(uint32_t id, const struct dawn_mac client_addr, struct kicking_nr* neighbor_list, uint32_t duration)
 {
     int ret = 0;
 
     printf("bss_transition_request() was called...\n");
 
-    if (neighbor_list != NULL)
+    if (neighbor_list != NULL && simulate_moves)
     {
         // Fake a client being disassociated and then rejoining on the recommended neighbor
         client* mc = client_array_get_client(client_addr);
@@ -64,11 +69,6 @@ int bss_transition_request(uint32_t id, const struct dawn_mac client_addr, struc
     return ret;
 }
 
-
-// When set (the default), kick stubs fake the client moving to the
-// recommended AP. 'sim_moves 0' leaves that to the script, so the result of
-// the request looks like real hostapd success (0).
-static int simulate_moves = 1;
 
 int wnm_disassoc_imminent(uint32_t id, const struct dawn_mac client_addr, struct kicking_nr* neighbor_list, int threshold, uint32_t duration)
 {
@@ -159,6 +159,9 @@ static double last_time;
 static bool first_time = true;
 
 static time_t faketime = 1000;
+
+// Kick records and steering backoff use dawn_stats_clock: follow faketime
+static time_t fake_clock(void) { return faketime; }
 static bool faketime_auto = true; // true = increment every command; false = scripted updates
 
 /*** Test harness code */
@@ -485,6 +488,16 @@ static int consume_actions(int argc, char* argv[], int harness_verbosity)
             if (curr_arg + args_required <= argc)
                 simulate_moves = atoi(argv[1]);
         }
+        else if (strcmp(*argv, "btm_response") == 0) // btm_response <client> <status>
+        {
+            args_required = 3;
+            if (curr_arg + args_required <= argc)
+            {
+                struct dawn_mac c;
+                hwaddr_aton(argv[1], c.u8);
+                stats_btm_response(c, atoi(argv[2]), faketime);
+            }
+        }
         else if (strcmp(*argv, "stats_show") == 0)
         {
             args_required = 1;
@@ -493,6 +506,14 @@ static int consume_actions(int argc, char* argv[], int harness_verbosity)
                 dawn_stats.evaluations, dawn_stats.stays, dawn_stats.kicks_deferred,
                 dawn_stats.kicks_sent[KICK_METHOD_RSSI_COMPARE], dawn_stats.kicks_sent[KICK_METHOD_ABSOLUTE_RSSI],
                 dawn_stats.kicks_moved, dawn_stats.kicks_stayed, dawn_stats.kicks_failed);
+            printf("stats: gentle=%u btm_accepted=%u btm_rejected=%u backoffs=%u\n",
+                dawn_stats.kicks_sent[KICK_METHOD_GENTLE], dawn_stats.btm_accepted,
+                dawn_stats.btm_rejected, dawn_stats.backoffs_started);
+            for (int i = 0; i < dawn_stats.client_count; i++)
+                printf("stats: client " MACSTR " requests=%u moved=%u stayed=%u rejected=%u misses=%u backoff=%d\n",
+                    MAC2STR(dawn_stats.clients[i].client.u8), dawn_stats.clients[i].requests,
+                    dawn_stats.clients[i].moved, dawn_stats.clients[i].stayed, dawn_stats.clients[i].rejected,
+                    dawn_stats.clients[i].misses, stats_client_in_backoff(dawn_stats.clients[i].client, faketime));
             for (int i = 0; i < dawn_stats.recent_count; i++)
                 printf("stats: kick " MACSTR " from " MACSTR " to " MACSTR " %s %s\n",
                     MAC2STR(dawn_stats.recent[i].client.u8), MAC2STR(dawn_stats.recent[i].from.u8),
@@ -1098,6 +1119,8 @@ static int process_script_line(char* line, size_t len, int harness_verbosity)
 
 int main(int argc, char* argv[])
 {
+    dawn_stats_clock = fake_clock;
+
     FILE* fp = NULL;
     char* line = NULL;
     size_t len = 0;

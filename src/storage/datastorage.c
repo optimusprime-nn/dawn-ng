@@ -604,40 +604,60 @@ int kick_clients(struct dawn_mac bssid_mac, uint32_t id) {
                                 dawnlog_info("Kicking NR entry: " NR_MACSTR ", score=%d\n", NR_MAC2STR(n->nr_ap->neighbor_report), n->score);
                         }
 
-                        // here we should send a messsage to set the probe.count for all aps to the min that there is no delay between switching
-                        // the hearing map is full...
-                        send_set_probe(j->client_addr);
+                        time_t now = dawn_stats_clock();
+                        int gentle = kick_type == 1 && stats_client_in_backoff(j->client_addr, now);
 
-                        // don't deauth station? <- deauth is better!
-                        // maybe we can use handovers...
-                        //del_client_interface(id, client_array[j].client_addr, NO_MORE_STAS, 1, 1000);
-                        if (kick_type == 1)
-                        {
-                            int sync_kick = wnm_disassoc_imminent(id, j->client_addr, kick_nr_list, own_score + dawn_metric.kicking_threshold, dawn_metric.duration);
+                        if (gentle && !stats_gentle_due(j->client_addr, now)) {
+                            // In backoff and asked recently: don't nag it every evaluation
+                            dawnlog_info("Client " MACSTR ": in steering backoff, asked recently - not asking again yet\n", MAC2STR(j->client_addr.u8));
+                        }
+                        else {
+                            // here we should send a messsage to set the probe.count for all aps to the min that there is no delay between switching
+                            // the hearing map is full...
+                            send_set_probe(j->client_addr);
 
-                            stats_kick(time(0), KICK_METHOD_RSSI_COMPARE, j->client_addr, kicking_ap->bssid_addr,
-                                    kick_nr_list ? &kick_nr_list->nr_ap->bssid_addr : NULL,
-                                    kick_nr_list ? kick_nr_list->score - own_score : 0, sync_kick);
-
-                            if (!sync_kick)
+                            // don't deauth station? <- deauth is better!
+                            // maybe we can use handovers...
+                            //del_client_interface(id, client_array[j].client_addr, NO_MORE_STAS, 1, 1000);
+                            if (gentle)
                             {
-                                client_array_delete(j, false);
+                                // This client keeps ignoring forced kicks: only ask nicely
+                                // (no disassociation imminent, so hostapd won't drop it).
+                                dawnlog_info("Client " MACSTR ": in steering backoff, sending a friendly request only\n", MAC2STR(j->client_addr.u8));
+                                int ret = bss_transition_request(id, j->client_addr, kick_nr_list, dawn_metric.duration);
 
-                                // don't delete clients in a row. use update function again...
-                                // -> chan_util update, ...
-                                //FIXME: Why / 4?
-                                add_client_update_timer(timeout_config.update_client * 1000 / 4);
+                                stats_kick(now, KICK_METHOD_GENTLE, j->client_addr, kicking_ap->bssid_addr,
+                                        kick_nr_list ? &kick_nr_list->nr_ap->bssid_addr : NULL,
+                                        kick_nr_list ? kick_nr_list->score - own_score : 0, ret);
                             }
-                        }
-                        else if (kick_type == 2)
-                        {
-                            int ret = bss_transition_request(id, j->client_addr, kick_nr_list, dawn_metric.duration);
+                            else if (kick_type == 1)
+                            {
+                                int sync_kick = wnm_disassoc_imminent(id, j->client_addr, kick_nr_list, own_score + dawn_metric.kicking_threshold, dawn_metric.duration);
 
-                            stats_kick(time(0), KICK_METHOD_ABSOLUTE_RSSI, j->client_addr, kicking_ap->bssid_addr,
-                                    kick_nr_list ? &kick_nr_list->nr_ap->bssid_addr : NULL, 0, ret);
-                        }
+                                stats_kick(now, KICK_METHOD_RSSI_COMPARE, j->client_addr, kicking_ap->bssid_addr,
+                                        kick_nr_list ? &kick_nr_list->nr_ap->bssid_addr : NULL,
+                                        kick_nr_list ? kick_nr_list->score - own_score : 0, sync_kick);
 
-                        kicked_clients++;
+                                if (!sync_kick)
+                                {
+                                    client_array_delete(j, false);
+
+                                    // don't delete clients in a row. use update function again...
+                                    // -> chan_util update, ...
+                                    //FIXME: Why / 4?
+                                    add_client_update_timer(timeout_config.update_client * 1000 / 4);
+                                }
+                            }
+                            else if (kick_type == 2)
+                            {
+                                int ret = bss_transition_request(id, j->client_addr, kick_nr_list, dawn_metric.duration);
+
+                                stats_kick(now, KICK_METHOD_ABSOLUTE_RSSI, j->client_addr, kicking_ap->bssid_addr,
+                                        kick_nr_list ? &kick_nr_list->nr_ap->bssid_addr : NULL, 0, ret);
+                            }
+
+                            kicked_clients++;
+                        }
                     }
                 }
             }
@@ -646,7 +666,7 @@ int kick_clients(struct dawn_mac bssid_mac, uint32_t id) {
             // FIXME: Causes clients to be kicked until first probe is received, which is a bit brutal for pre-802.11k clients.
             dawnlog_info("Client " MACSTR ": No Information about client. Force reconnect:\n", MAC2STR(j->client_addr.u8));
             print_client_entry(DAWNLOG_TRACE, j);
-            stats_kick(time(0), KICK_METHOD_FORCE_RECONNECT, j->client_addr, kicking_ap->bssid_addr, NULL, 0, 0);
+            stats_kick(dawn_stats_clock(), KICK_METHOD_FORCE_RECONNECT, j->client_addr, kicking_ap->bssid_addr, NULL, 0, 0);
             del_client_interface(id, j->client_addr, 0, 1, 0);
         }
         else {

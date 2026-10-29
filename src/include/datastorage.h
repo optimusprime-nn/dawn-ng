@@ -78,6 +78,8 @@ struct probe_metric_s {
     int kicking;
     int kicking_threshold;
     int duration;
+    int steer_max_misses;   // consecutive ignored kicks before backoff; 0 = never back off
+    int steer_backoff;      // seconds a client only gets friendly (non-disconnecting) requests
     int rrm_mode_mask;
     int rrm_mode_order[__RRM_BEACON_RQST_MODE_MAX];
 
