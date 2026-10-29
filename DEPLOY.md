@@ -155,10 +155,23 @@ If your image has a different basic variant (`wpad-basic-wolfssl`,
 apk add --allow-untrusted /tmp/dawn-feed/dawn-*.apk /tmp/dawn-feed/luci-app-dawn-*.apk
 ```
 
-`--allow-untrusted` is needed because OpenWrt 25.12 doesn't sign
-individually built packages. Install only packages from this repo's CI or
-that you built yourself. To avoid the flag, see
-[Signed feed](#signed-feed-optional) below.
+`--allow-untrusted` is needed the first time, while the router doesn't yet
+know this repository's signing key. Install only packages from this repo's
+CI or that you built yourself.
+
+**Later updates from LuCI (25.12):** the `dawn` package installs this
+repository's public key (`/etc/apk/keys/dawn-dev.pem`), and CI signs every
+`.apk` with the matching private key (when the `APK_KEY` secret is set, see
+[Signed feed](#signed-feed-optional)). So from the second install on, you
+can update without SSH: **System → Software → Upload Package...**, pick
+`dawn-*.apk` from the artifact, **Install**, then the same for
+`luci-app-dawn-*.apk`. Upload `dawn` first: a newer `luci-app-dawn` may
+need the newer daemon. If LuCI still says *UNTRUSTED signature*, the
+installed `dawn` predates this (install once more over SSH as above), or
+the build had no `APK_KEY` (the CI run shows a warning).
+
+On 24.10, LuCI's upload works without any of this (opkg doesn't check
+signatures of uploaded packages).
 
 **OpenWrt 24.10:**
 
@@ -195,10 +208,16 @@ always installs as an upgrade.
 ### Signed feed (optional)
 
 CI signs each feed's index once the repository has the secrets
-**`USIGN_KEY`** (24.10) and **`APK_KEY`** (25.12). The private keys were
-handed over separately; the public halves are in `keys/`. With a signed feed
-and the public key on the router, packages install without
-`--allow-untrusted`.
+**`USIGN_KEY`** (24.10) and **`APK_KEY`** (25.12), and with `APK_KEY` also
+every 25.12 package on its own. The private keys were handed over
+separately; the public halves are in `keys/`, and the `dawn` package
+installs them. With a signed feed and the public key on the router,
+packages install without `--allow-untrusted`. CI checks that `APK_KEY`
+matches `keys/dawn-dev.pem` and fails the build if it doesn't.
+
+To add a secret: repository **Settings → Secrets and variables → Actions
+→ New repository secret**, name `APK_KEY`, value the whole private key
+file including the `-----BEGIN ... KEY-----` lines.
 
 This path hasn't been tested on a router yet. If it fails, use the commands
 above.
@@ -236,6 +255,10 @@ The page now starts with the two things most people need:
   - **Shared key**: click **Generate new key**, then **Save & Apply**. Enter
     the **same key** on every other AP; copy it from Setup Check's
     **Show key**.
+  - **Encrypt traffic between APs**: also hides what the APs tell each
+    other (client addresses, signal levels) from anyone on the network.
+    Turn it on once every AP runs this build; APs can be switched one at a
+    time.
   - **Accept settings from other APs**: the default only applies settings
     pushed by APs that have the key.
 
@@ -291,6 +314,8 @@ key=$(hexdump -n 32 -e '32/1 "%02x"' /dev/urandom); echo "$key"
 uci set dawn.@network[0].auth_key="$key" && uci commit dawn && service dawn reload
 # ...and set the same value on every other AP:
 #   uci set dawn.@network[0].auth_key=<that key> && uci commit dawn && service dawn reload
+# Optional, once every AP runs this build: encrypt what they send each other
+#   uci set dawn.@network[0].encrypt_peers=1 && uci commit dawn && service dawn reload
 
 # Make sure steering is on (0 = off, 3 = both methods, the default)
 uci set dawn.global.kicking=3 && uci commit dawn && service dawn reload
@@ -302,7 +327,7 @@ uci set dawn.global.kicking=3 && uci commit dawn && service dawn reload
 
 ```sh
 # hostapd has the methods DAWN needs (full wpad + 802.11v)
-ubus -v list 'hostapd.*' | grep -E 'bss_transition_request|wnm_disassoc_imminent'
+ubus -v list 'hostapd.*' | grep bss_transition_request
 
 # What DAWN knows: APs (local and peers) and connected clients
 ubus call dawn get_network
@@ -368,6 +393,12 @@ unpatched DAWN.
 3. From a PC: `python3 tools/dawn-peer-test.py 192.168.1.1` (no key) must
    not change **Network Overview**. With `--auth-key <key>` a made-up AP
    `11:22:33:44:55:66` appears there for a few minutes.
+4. Encryption: turn on **Encrypt traffic between APs** on one AP. Setup
+   Check there says **authenticated and encrypted**; the other APs stay
+   connected, and `ubus call dawn get_stats` on them shows
+   `messages_encrypted` rising. Then turn it on everywhere.
+   (`dawn-peer-test.py --auth-key <key> --encrypt` sends encrypted test
+   messages; needs `pip install cryptography`.)
 
 ### C. Band steering on one router
 
@@ -384,8 +415,10 @@ unpatched DAWN.
 
 Clients don't have to obey 802.11v requests: iPhones and recent Android
 devices usually do, some laptops and IoT devices ignore them. "Stayed" over
-and over for one device is that device's choice. Setup Check flags it when it
-happens across the board.
+and over for one device is that device's choice. After two misses in a row
+DAWN stops forcing that device for an hour and only asks nicely (method
+**Gentle**); the **Client behaviour** table on the Steering page shows this.
+Setup Check flags it when it happens across the board.
 
 ### D. Roaming between access points (needs 2+ APs)
 
@@ -430,7 +463,7 @@ Push to `main` (or open a pull request). The workflows:
 | Workflow | What it does |
 |---|---|
 | **OpenWrt packages** | builds the packages and feeds for 24.10 and 25.12, five architectures (about 20 minutes) |
-| **Host tests** | DAWN's test programs and scripts under AddressSanitizer + UndefinedBehaviorSanitizer |
+| **Host tests** | DAWN's test programs and scripts under AddressSanitizer + UndefinedBehaviorSanitizer, then the daemon integration test: two real DAWN daemons with fake hostapd/umdns/iwinfo, checking discovery, steering, backoff, peer authentication and malformed peer messages end to end |
 | **Fuzz** | libFuzzer on peer message handling and authentication: 2 min per push, 30 min weekly |
 | **LuCI tests** | the LuCI pages in Chromium with the real LuCI runtime against a mock router |
 
@@ -465,6 +498,7 @@ sudo apt install cmake clang libjson-c-dev libgcrypt20-dev
 PREFIX=$HOME/dawn-deps tools/ci/build-host-deps.sh
 PREFIX=$HOME/dawn-deps tools/ci/run-host-tests.sh          # sanitizer tests
 PREFIX=$HOME/dawn-deps FUZZ_SECONDS=60 tools/ci/run-fuzz.sh # fuzzing
+PREFIX=$HOME/dawn-deps tools/ci/run-integration-test.sh     # two live daemons (~30 s; --keep keeps the logs)
 
 # LuCI pages (needs an openwrt/luci checkout and Playwright)
 pip install playwright && python -m playwright install chromium

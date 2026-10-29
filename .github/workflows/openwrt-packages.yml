@@ -5,7 +5,10 @@ name: OpenWrt packages
 # Each artifact is a complete package feed (packages + index). If the
 # repository secrets USIGN_KEY (24.10) / APK_KEY (25.12) are set, the index is
 # signed, and routers holding the public keys in keys/ install from it without
-# --allow-untrusted. Pushing a tag like v1 also publishes a GitHub release.
+# --allow-untrusted. With APK_KEY, each 25.12 .apk is signed as well, so it can
+# be installed on its own (LuCI "Upload Package..."); the dawn package ships the
+# public keys, so after the first install that works without any setup.
+# Pushing a tag like v1 also publishes a GitHub release.
 
 on:
   push:
@@ -62,6 +65,23 @@ jobs:
           cp -v "$FEED"/* "$OUT"/
           ls "$OUT" | grep -qE '\.(ipk|apk)$' || { echo "No packages were produced"; ls -R bin/packages || true; exit 1; }
           ls -la "$OUT"
+
+      - name: Tools for signing packages
+        if: matrix.release == '25.12'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends meson ninja-build libssl-dev zlib1g-dev
+
+      - name: Cache apk-tools
+        if: matrix.release == '25.12'
+        uses: actions/cache@v4
+        with:
+          path: ~/apk-tools
+          key: apk-tools-3.0.5-b5a31c0-${{ runner.os }}
+
+      - name: Sign each package (25.12)
+        if: matrix.release == '25.12'
+        env:
+          APK_KEY: ${{ secrets.APK_KEY }}
+        run: tools/ci/sign-apk-packages.sh "$RUNNER_TEMP/out"
 
       - uses: actions/upload-artifact@v4
         with:

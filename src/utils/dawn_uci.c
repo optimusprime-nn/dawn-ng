@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "dawn_stats.h"
 #include "memory_utils.h"
 #include "datastorage.h"
 #include "dawn_iwinfo.h"
@@ -223,8 +224,11 @@ static struct uci_section *uci_find_metric_section(const char *name) {
 
     uci_foreach_element(&uci_pkg->sections, e) {
         s = uci_to_section(e);
+        // name == NULL looks for the first anonymous section. This used to
+        // fall through to strcmp(e->name, NULL) on a named section, crashing
+        // DAWN at startup when the config had no 'global' metric section.
         if (strcmp(s->type, "metric") == 0 &&
-            ((!name && s->anonymous) || strcmp(e->name, name) == 0)) {
+            (name ? strcmp(e->name, name) == 0 : s->anonymous)) {
             return s;
         }
     }
@@ -273,6 +277,10 @@ struct probe_metric_s uci_get_dawn_metric() {
         .chan_util_avg_period = 3,
         // CONFIG-G: duration|802.11k BEACON request measurement duration (TUs), also used as the 802.11v BSS-TM disassociation_timer and validity_period.  Must not be 0 because some clients refuse a zero-length measurement, leaving DAWN with no BEACON REPORT data to steer on|[150]
         .duration = 150,
+        // CONFIG-G: steer_max_misses|Consecutive steering requests a client may ignore or reject (or return to the same AP after) before DAWN stops forcing it off: it then only gets friendly requests for steer_backoff seconds. 0 = never back off (old behaviour)|[2]
+        .steer_max_misses = 2,
+        // CONFIG-G: steer_backoff|Seconds a client that keeps ignoring steering only gets friendly requests (no forced disassociation)|[3600]
+        .steer_backoff = 3600,
         // CONFIG-G: rrm_mode|Preferred order for using Passive, Active or Table 802.11k BEACON information|[PAT] String of 'P', 'A' and / or 'T'
         .rrm_mode_mask = WLAN_RRM_CAPS_BEACON_REPORT_PASSIVE |
                          WLAN_RRM_CAPS_BEACON_REPORT_ACTIVE |
@@ -347,6 +355,8 @@ struct probe_metric_s uci_get_dawn_metric() {
         DAWN_SET_CONFIG_INT(ret, global_s, bandwidth_threshold);
         DAWN_SET_CONFIG_INT(ret, global_s, chan_util_avg_period);
         DAWN_SET_CONFIG_INT(ret, global_s, duration);
+        DAWN_SET_CONFIG_INT(ret, global_s, steer_max_misses);
+        DAWN_SET_CONFIG_INT(ret, global_s, steer_backoff);
         ret.rrm_mode_mask = parse_rrm_mode(ret.rrm_mode_order,
                                            uci_lookup_option_string(uci_ctx, global_s, "rrm_mode"));
         global_neighbors = uci_lookup_option(uci_ctx, global_s, "neighbors");
@@ -374,6 +384,8 @@ struct probe_metric_s uci_get_dawn_metric() {
     DAWN_SET_BANDS_CONFIG_INT(ret, global_s, band_s, low_rssi_val);
     DAWN_SET_BANDS_CONFIG_INT(ret, global_s, band_s, rssi_weight);
     DAWN_SET_BANDS_CONFIG_INT(ret, global_s, band_s, rssi_center);
+
+    stats_set_backoff_policy(ret.steer_max_misses, ret.steer_backoff);
     return ret;
 }
 
@@ -392,6 +404,7 @@ struct network_config_s uci_get_dawn_network() {
         .bandwidth = -1,
         .auth_key = "",
         .accept_config_push = ACCEPT_CONFIG_PUSH_AUTHENTICATED,
+        .encrypt_peers = 0,
     };
 
     dawnlog_debug_func("Entering...");
@@ -445,6 +458,8 @@ struct network_config_s uci_get_dawn_network() {
                 snprintf(ret.auth_key, sizeof(ret.auth_key), "%s", str_auth_key);
             // CONFIG-N: accept_config_push|Apply configuration pushed by other DAWN instances|0 = Never; 1 = From any peer (unsafe without auth_key); [2 = Only from authenticated peers]
             DAWN_SET_CONFIG_INT(ret, s, accept_config_push);
+            // CONFIG-N: encrypt_peers|Encrypt messages between DAWN instances (AES-256-GCM, keyed from auth_key). Peers with a key accept both encrypted and plain authenticated messages, so APs can be switched one at a time; DAWN builds without encryption support can't read encrypted messages.|[0 = Authenticate only]; 1 = Encrypt (needs auth_key)
+            DAWN_SET_CONFIG_INT(ret, s, encrypt_peers);
             return ret;
         }
     }
@@ -464,7 +479,7 @@ bool uci_get_dawn_hostapd_dir() {
             // CONFIG-H: hostapd_dir|Path to hostapd runtime information|[/var/run/hostapd]
             const char* str = uci_lookup_option_string(uci_ctx, s, "hostapd_dir");
             if (str)
-                strncpy(hostapd_dir_glob, str, HOSTAPD_DIR_LEN);
+                snprintf(hostapd_dir_glob, HOSTAPD_DIR_LEN, "%s", str);
 
             return true;
         }
@@ -555,6 +570,8 @@ int uci_reset()
     return 0;
 }
 
+const char *dawn_uci_confdir = NULL;
+
 int uci_init() {
     dawnlog_debug_func("Entering...");
 
@@ -564,6 +581,15 @@ int uci_init() {
         ctx = uci_alloc_context();
         dawn_regmem(ctx);
         uci_ctx = ctx;
+
+        if (dawn_uci_confdir) {
+            // Used by tests to run several instances side by side. Keep
+            // uncommitted changes next to the config, not in shared /tmp/.uci.
+            char savedir[256];
+            snprintf(savedir, sizeof(savedir), "%s/.uci-save", dawn_uci_confdir);
+            uci_set_confdir(ctx, dawn_uci_confdir);
+            uci_set_savedir(ctx, savedir);
+        }
 
         ctx->flags &= ~UCI_FLAG_STRICT;
     } else {

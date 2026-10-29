@@ -80,6 +80,17 @@ value then a "soft" kick is done, which asks the device to look at other APs
 but does not enforce this through a disconnection. Forced disconnection would be disruptive to legacy clients that may not be able to find a suitable AP to
 connect to.
 
+### Stubborn clients
+Some clients ignore 802.11v requests, reject them, or come straight back to
+the AP they were sent away from. Forcing them off over and over just causes
+dropouts. After `steer_max_misses` such outcomes in a row (default 2) DAWN
+backs off from that client for `steer_backoff` seconds (default 3600): it
+only sends a friendly BSS transition request (no disassociation, no
+"don't come back" timer), at most once every 5 minutes. The client's next
+successful move, or an accepted request, ends the backoff. Set
+`steer_max_misses` to 0 to always force. The LuCI Steering page shows each
+client's record and whether it is backing off.
+
 ### Other Features
 The following are less likely to need attention:
 - The way 802.11v Neighbor Reports are generated can be adjusted.
@@ -166,6 +177,8 @@ grep 'CONFIG-G:' `find . -type f -name "*.[ch]"`| sed 's/^.*CONFIG-.: *\(.*\)$/|
 |neighbors|Space separated list of MACS to use in "static" AP Neighbor Report| None|
 |rrm_mode|Preferred order for using Passive, Active or Table 802.11k BEACON information|[PAT] String of 'P', 'A' and / or 'T'|
 |set_hostapd_nr|Method used to set Neighbor Report on AP|[0 = Disabled]; 1 = "Static" based on all APs in network (plus set from configuration); 2 = "Dynamic" based on next nearest AP seen by current clients|
+|steer_backoff|Seconds a client that keeps ignoring steering only gets friendly (non-forcing) requests|[3600]|
+|steer_max_misses|Ignored, rejected or bounced-back steering requests in a row before backing off from a client|0 = Never back off; [2]|
 |use_station_count|Compare connected station counts when considering kicking|[0 = Disabled]; 1 = Enabled|
 
 ## Per Band Metric Parameters
@@ -232,13 +245,14 @@ grep 'CONFIG-N:' `find . -type f -name "*.[ch]"`|sed 's/^.*CONFIG-.: *\(.*\)$/|\
 |broadcast_ip|IP address for broadcast and multicast|No default|
 |broadcast_port|IP port for broadcast and multicast|[1025]|
 |collision_domain|Unused|N/A|
+|encrypt_peers|Encrypt messages between DAWN instances (AES-256-GCM, keyed from auth_key). Peers with a key accept both encrypted and plain authenticated messages, so APs can be switched one at a time; DAWN builds without encryption support can't read encrypted messages.|[0 = Authenticate only]; 1 = Encrypt (needs auth_key)|
 |iv|Unused|N/A|
 |network_option|Method of networking between DAWN instances|0 = Broadcast; 1 = Multicast; [2 = TCP with UMDNS discovery (formely called multicast) ]; 3 = TCP w/out UMDNS discovery|
 |server_ip|IP address when not using UMDNS|No default|
 |shared_key|Unused|N/A|
 |tcp_ip|IP address for TCP networking|[0.0.0.0]|
 |tcp_port|Port for TCP networking|[1026]|
-|use_symm_enc|Enable encryption of network traffic|[0 = Disabled]; 1 = Enabled|
+|use_symm_enc|Legacy encryption with the fixed shared_key / iv (deprecated: use encrypt_peers)|[0 = Disabled]; 1 = Enabled|
 
 ### Securing peer traffic
 Without `auth_key`, any device that can reach `tcp_port` can feed DAWN
@@ -251,11 +265,23 @@ AP's DAWN configuration. To lock it down:
        key=$(hexdump -n 32 -e '32/1 "%02x"' /dev/urandom)
        uci set dawn.@network[0].auth_key="$key" && uci commit dawn && service dawn reload
 
-   `auth_key` and `accept_config_push` are re-read on reload; the other
-   network options need `service dawn restart`.
-2. Keep the APs' clocks in sync (OpenWrt's NTP client is on by default):
+   `auth_key`, `encrypt_peers` and `accept_config_push` are re-read on
+   reload; the other network options need `service dawn restart`.
+2. To also hide what the APs tell each other (client MAC addresses, signal
+   levels, hostnames), turn on encryption:
+
+       uci set dawn.@network[0].encrypt_peers=1 && uci commit dawn && service dawn reload
+
+   Messages are then AES-256-GCM encrypted with a key derived from
+   `auth_key` (format in `src/include/dawn_auth.h`). An AP with a key accepts
+   both encrypted and authenticated-only messages, so you can turn this on
+   one AP at a time - but every AP must run a DAWN build that knows
+   encryption, or it will reject the encrypted messages. `get_stats` shows
+   `peer_encryption` and, under `peers`, how many `messages_encrypted` were
+   received.
+3. Keep the APs' clocks in sync (OpenWrt's NTP client is on by default):
    messages more than 5 minutes off are rejected to limit replays.
-3. Optionally restrict the port to your APs in the firewall, e.g.
+4. Optionally restrict the port to your APs in the firewall, e.g.
 
        uci add firewall rule
        uci set firewall.@rule[-1].name='DAWN peers only'
@@ -272,8 +298,8 @@ AP's DAWN configuration. To lock it down:
        uci set firewall.@rule[-1].target='REJECT'
        uci commit firewall && service firewall restart
 
-`use_symm_enc` remains as before and is reported to be broken; `auth_key`
-does not depend on it.
+`use_symm_enc` (fixed `shared_key` / `iv`, no integrity protection) remains
+for compatibility but is deprecated: use `auth_key` with `encrypt_peers`.
 
 
 ## Local Parameters

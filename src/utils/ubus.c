@@ -237,14 +237,26 @@ void ubus_set_nr();
 static int build_hearing_map_sort_client(struct blob_buf* b);
 
 /*** CODE START ***/
+
+// SSIDs are used as JSON object keys in get_network / get_hearing_map. An
+// empty key makes blobmsg_format_json() print invalid JSON ("{ {"), which
+// breaks ubus callers such as LuCI - and a peer can report an AP without an
+// SSID, or iwinfo may fail to read one.
+static const char *ssid_table_name(const uint8_t *ssid) {
+    return ssid[0] ? (const char *)ssid : "(unknown SSID)";
+}
+
 void apply_peer_auth_config(const struct network_config_s *cfg) {
     snprintf(network_config.auth_key, sizeof(network_config.auth_key), "%s", cfg->auth_key);
     network_config.accept_config_push = cfg->accept_config_push;
+    network_config.encrypt_peers = cfg->encrypt_peers;
+    dawn_auth_set_encrypt(cfg->encrypt_peers != 0);
 
     switch (dawn_auth_set_key(cfg->auth_key)) {
     case DAWN_AUTH_KEY_SET:
         if (network_config.network_option == 2 || network_config.network_option == 3)
-            dawnlog_always("Peer messages are authenticated (auth_key set)\n");
+            dawnlog_always("Peer messages are %s (auth_key set)\n",
+                    cfg->encrypt_peers ? "encrypted and authenticated" : "authenticated");
         else
             dawnlog_warning("auth_key is only supported with TCP networking (network_option 2 or 3); "
                     "UDP messages are NOT authenticated\n");
@@ -254,6 +266,8 @@ void apply_peer_auth_config(const struct network_config_s *cfg) {
         break;
     case DAWN_AUTH_KEY_NONE:
     default:
+        if (cfg->encrypt_peers)
+            dawnlog_error("encrypt_peers needs an auth_key; peer messages are NOT encrypted\n");
         dawnlog_warning("No auth_key set: any device that can reach the DAWN port can inject data%s\n",
                 cfg->accept_config_push == ACCEPT_CONFIG_PUSH_ANY ? " and rewrite this AP's DAWN configuration" : "");
         break;
@@ -739,6 +753,39 @@ int send_blob_attr_via_network(struct blob_attr* msg, char* method) {
     return 0;
 }
 
+enum {
+    BTM_RESP_ADDRESS,
+    BTM_RESP_STATUS,
+    __BTM_RESP_MAX
+};
+
+static const struct blobmsg_policy btm_resp_policy[__BTM_RESP_MAX] = {
+    [BTM_RESP_ADDRESS] = {.name = "address", .type = BLOBMSG_TYPE_STRING},
+    [BTM_RESP_STATUS] = {.name = "status-code", .type = BLOBMSG_TYPE_INT8},
+};
+
+// hostapd 'bss-transition-response': whether a client accepted our request.
+static int handle_btm_response(struct blob_attr *msg) {
+    struct blob_attr *tb[__BTM_RESP_MAX];
+    struct dawn_mac client;
+
+    blobmsg_parse(btm_resp_policy, __BTM_RESP_MAX, tb, blob_data(msg), blob_len(msg));
+
+    if (!tb[BTM_RESP_ADDRESS] || !tb[BTM_RESP_STATUS] ||
+            hwaddr_aton(blobmsg_get_string(tb[BTM_RESP_ADDRESS]), client.u8))
+        return UBUS_STATUS_INVALID_ARGUMENT;
+
+    int status = blobmsg_get_u8(tb[BTM_RESP_STATUS]);
+    dawnlog_info("Client " MACSTR ": BSS transition response, status %d (%s)\n",
+            MAC2STR(client.u8), status, status == 0 ? "accepted" : "rejected");
+
+    dawn_mutex_lock(&client_array_mutex);
+    stats_btm_response(client, status, dawn_stats_clock());
+    dawn_mutex_unlock(&client_array_mutex);
+
+    return 0;
+}
+
 static int hostapd_notify(struct ubus_context* ctx_local, struct ubus_object* obj,
     struct ubus_request_data* req, const char* method,
     struct blob_attr* msg) {
@@ -783,6 +830,8 @@ static int hostapd_notify(struct ubus_context* ctx_local, struct ubus_object* ob
         ret = handle_deauth_req(b.head);
     } else if (strncmp(method, "beacon-report", 12) == 0) {
         ret = handle_beacon_rep(b.head);
+    } else if (strcmp(method, "bss-transition-response") == 0) {
+        ret = handle_btm_response(b.head);
     }
 
     blob_buf_free(&b);
@@ -1375,7 +1424,9 @@ static void ubus_umdns_cb(struct ubus_request *req, int type, struct blob_attr *
     if (!msg)
         return;
 
-    blobmsg_parse(dawn_umdns_table_policy, __DAWN_UMDNS_MAX, tb, blob_data(msg), blob_len(msg));
+    // (Was parsed with __DAWN_UMDNS_MAX = 2 into this 1-entry array and
+    // 1-entry policy: a stack overflow on every umdns browse.)
+    blobmsg_parse(dawn_umdns_table_policy, __DAWN_UMDNS_TABLE_MAX, tb, blob_data(msg), blob_len(msg));
 
     if (!tb[DAWN_UMDNS_TABLE]) {
         return;
@@ -1398,7 +1449,9 @@ static void ubus_umdns_cb(struct ubus_request *req, int type, struct blob_attr *
             dawnlog_debug("IPV4: %s\n", blobmsg_get_string(tb_dawn[DAWN_UMDNS_IPV4]));
             dawnlog_debug("Port: %d\n", blobmsg_get_u32(tb_dawn[DAWN_UMDNS_PORT]));
         } else {
-            return; // TODO: We're in a loop. Should this be return or continue?
+            // Skip just this entry (e.g. an IPv6-only announcement). This used
+            // to return, so every peer listed after it was never connected to.
+            continue;
         }
         add_tcp_connection(blobmsg_get_string(tb_dawn[DAWN_UMDNS_IPV4]), blobmsg_get_u32(tb_dawn[DAWN_UMDNS_PORT]));
     }
@@ -1651,6 +1704,7 @@ static int get_stats(struct ubus_context *ctx_local, struct ubus_object *obj,
 
     blobmsg_add_u32(&b, "uptime", (uint32_t)(now - dawn_stats.started));
     blobmsg_add_u8(&b, "peer_auth", dawn_auth_enabled());
+    blobmsg_add_u8(&b, "peer_encryption", dawn_auth_encrypting());
 
     // Kick records are written under client_array_mutex
     dawn_mutex_lock(&client_array_mutex);
@@ -1666,11 +1720,16 @@ static int get_stats(struct ubus_context *ctx_local, struct ubus_object *obj,
     blobmsg_add_u32(&b, "failed", dawn_stats.kicks_failed);
     blobmsg_add_u32(&b, "moved", dawn_stats.kicks_moved);
     blobmsg_add_u32(&b, "stayed", dawn_stats.kicks_stayed);
+    blobmsg_add_u32(&b, "sent_gentle", dawn_stats.kicks_sent[KICK_METHOD_GENTLE]);
+    blobmsg_add_u32(&b, "btm_accepted", dawn_stats.btm_accepted);
+    blobmsg_add_u32(&b, "btm_rejected", dawn_stats.btm_rejected);
+    blobmsg_add_u32(&b, "backoffs_started", dawn_stats.backoffs_started);
     blobmsg_close_table(&b, t);
 
     t = blobmsg_open_table(&b, "peers");
     blobmsg_add_u32(&b, "messages_received", dawn_stats.peer_msgs_received);
     blobmsg_add_u32(&b, "messages_rejected_auth", dawn_stats.peer_msgs_rejected_auth);
+    blobmsg_add_u32(&b, "messages_encrypted", dawn_stats.peer_msgs_encrypted);
     blobmsg_add_u32(&b, "config_push_applied", dawn_stats.config_push_applied);
     blobmsg_add_u32(&b, "config_push_ignored", dawn_stats.config_push_ignored);
     blobmsg_close_table(&b, t);
@@ -1693,6 +1752,28 @@ static int get_stats(struct ubus_context *ctx_local, struct ubus_object *obj,
         blobmsg_add_string(&b, "outcome", stats_outcome_name(r->outcome));
         if (r->outcome != KICK_OUTCOME_PENDING)
             blobmsg_add_u32(&b, "outcome_after", (uint32_t)(r->outcome_time - r->time));
+        if (r->btm_response != BTM_RESPONSE_NONE) {
+            blobmsg_add_string(&b, "response", r->btm_response == BTM_RESPONSE_ACCEPTED ? "accepted" : "rejected");
+            blobmsg_add_u32(&b, "response_status", r->btm_status);
+        }
+        blobmsg_close_table(&b, e);
+    }
+    blobmsg_close_array(&b, a);
+
+    // Per-client history, for clients DAWN has tried to steer
+    a = blobmsg_open_array(&b, "clients");
+    for (int i = 0; i < dawn_stats.client_count; i++) {
+        const struct client_steering *c = &dawn_stats.clients[i];
+        void *e = blobmsg_open_table(&b, NULL);
+
+        blobmsg_add_mac_string(&b, "client", c->client);
+        blobmsg_add_u32(&b, "requests", c->requests);
+        blobmsg_add_u32(&b, "moved", c->moved);
+        blobmsg_add_u32(&b, "stayed", c->stayed);
+        blobmsg_add_u32(&b, "rejected", c->rejected);
+        blobmsg_add_u32(&b, "misses", c->misses);
+        if (stats_client_in_backoff(c->client, now))
+            blobmsg_add_u32(&b, "backoff_remaining", (uint32_t)(c->backoff_until - now));
         blobmsg_close_table(&b, e);
     }
     blobmsg_close_array(&b, a);
@@ -2018,6 +2099,8 @@ int uci_send_via_network()
     blobmsg_add_u32(&b, "set_hostapd_nr", dawn_metric.set_hostapd_nr);
     blobmsg_add_u32(&b, "disassoc_nr_length", dawn_metric.disassoc_nr_length);
     blobmsg_add_u32(&b, "duration", dawn_metric.duration);
+    blobmsg_add_u32(&b, "steer_max_misses", dawn_metric.steer_max_misses);
+    blobmsg_add_u32(&b, "steer_backoff", dawn_metric.steer_backoff);
     blobmsg_add_string(&b, "rrm_mode", get_rrm_mode_string(dawn_metric.rrm_mode_order));
     band_table = blobmsg_open_table(&b, "band_metrics");
 
@@ -2155,7 +2238,7 @@ int build_hearing_map_sort_client(struct blob_buf *b) {
     {
         // Add new outer sections if needed
         if (!same_ssid) {
-            ssid_list = blobmsg_open_table(b, (char*)this_entry->ap_k->ssid);
+            ssid_list = blobmsg_open_table(b, ssid_table_name(this_entry->ap_k->ssid));
             same_ssid = true;
         }
 
@@ -2250,7 +2333,7 @@ int build_network_overview(struct blob_buf *b) {
     for (ap* m = ap_set; m != NULL; m = m->next_ap) {
         if(add_ssid)
         {
-            ssid_list = blobmsg_open_table(b, (char *) m->ssid);
+            ssid_list = blobmsg_open_table(b, ssid_table_name(m->ssid));
             add_ssid = false;
         }
         sprintf(ap_mac_buf, MACSTR, MAC2STR(m->bssid_addr.u8));

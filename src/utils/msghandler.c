@@ -672,6 +672,8 @@ enum {
     UCI_CHAN_UTIL_AVG_PERIOD,
     UCI_SET_HOSTAPD_NR,
     UCI_DURATION,
+    UCI_STEER_MAX_MISSES,
+    UCI_STEER_BACKOFF,
     UCI_RRM_MODE,
     UCI_BAND_METRICS,
     __UCI_METRIC_MAX
@@ -734,6 +736,8 @@ static const struct blobmsg_policy uci_metric_policy[__UCI_METRIC_MAX] = {
         [UCI_CHAN_UTIL_AVG_PERIOD] = {.name = "chan_util_avg_period", .type = BLOBMSG_TYPE_INT32},
         [UCI_SET_HOSTAPD_NR] = {.name = "set_hostapd_nr", .type = BLOBMSG_TYPE_INT32},
         [UCI_DURATION] = {.name = "duration", .type = BLOBMSG_TYPE_INT32},
+        [UCI_STEER_MAX_MISSES] = {.name = "steer_max_misses", .type = BLOBMSG_TYPE_INT32},
+        [UCI_STEER_BACKOFF] = {.name = "steer_backoff", .type = BLOBMSG_TYPE_INT32},
         [UCI_RRM_MODE] = {.name = "rrm_mode", .type = BLOBMSG_TYPE_STRING},
         [UCI_BAND_METRICS] = {.name = "band_metrics", .type = BLOBMSG_TYPE_TABLE},
 };
@@ -841,6 +845,8 @@ static int handle_uci_config(struct blob_attr* msg) {
     set_uci_u32("global", "chan_util_avg_period", tb_metric[UCI_CHAN_UTIL_AVG_PERIOD]);
     set_uci_u32("global", "set_hostapd_nr", tb_metric[UCI_SET_HOSTAPD_NR]);
     set_uci_u32("global", "duration", tb_metric[UCI_DURATION]);
+    set_uci_u32("global", "steer_max_misses", tb_metric[UCI_STEER_MAX_MISSES]);
+    set_uci_u32("global", "steer_backoff", tb_metric[UCI_STEER_BACKOFF]);
 
     if (tb_metric[UCI_RRM_MODE]) {
         char cmd_buffer[UCI_CMD_LEN];

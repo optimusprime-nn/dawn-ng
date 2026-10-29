@@ -1,5 +1,7 @@
 /* Unit tests for dawn_auth (peer message authentication). */
+#define _GNU_SOURCE
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <gcrypt.h>
 
@@ -63,7 +65,66 @@ int main(void) {
 
     CHECK(dawn_auth_unwrap(w, DAWN_AUTH_HDR_LEN - 1, now, &plen, NULL) == NULL, "truncated header rejected");
     CHECK(dawn_auth_unwrap(w, DAWN_AUTH_HDR_LEN, now, &plen, NULL) == NULL, "header without payload rejected (tag mismatch)");
-    CHECK(dawn_auth_unwrap(msg, len, now, &plen, &reason) == NULL && strstr(reason, "not authenticated"), "plain message rejected");
+    {
+        char plain[sizeof(msg)];
+        memcpy(plain, msg, sizeof(msg));
+        CHECK(dawn_auth_unwrap(plain, len, now, &plen, &reason) == NULL && strstr(reason, "not authenticated"), "plain message rejected");
+    }
+
+    /* ---- encryption (AES-256-GCM) */
+    dawn_auth_set_key(KEY_A);
+    dawn_auth_set_encrypt(true);
+    CHECK(dawn_auth_encrypting(), "encryption on");
+    size_t elen = 0;
+    char *e = dawn_auth_wrap(msg, len, now, &elen);
+    CHECK(e && elen == len + DAWN_ENC_OVERHEAD && !memcmp(e, "DWE1", 4), "encrypted wrap adds header and tag");
+    CHECK(e && !memmem(e, elen, "probe", 5), "payload not readable on the wire");
+    size_t e2len = 0;
+    char *e2 = dawn_auth_wrap(msg, len, now, &e2len);
+    CHECK(e && e2 && memcmp(e + 12, e2 + 12, 12) != 0 && memcmp(e + DAWN_ENC_HDR_LEN, e2 + DAWN_ENC_HDR_LEN, len) != 0,
+          "fresh nonce per message");
+
+    char *copy = malloc(elen);
+    #define FRESH() memcpy(copy, e, elen)
+    FRESH();
+    char *d = dawn_auth_unwrap(copy, elen, now, &plen, &reason);
+    CHECK(d && plen == len && !memcmp(d, msg, len) && d[plen] == '\0', "encrypted round trip");
+    FRESH();
+    CHECK(dawn_auth_unwrap(copy, elen, now + 301, &plen, &reason) == NULL && strstr(reason, "timestamp"), "encrypted: old message rejected");
+    FRESH(); copy[elen - 1] ^= 1;
+    CHECK(dawn_auth_unwrap(copy, elen, now, &plen, &reason) == NULL && strstr(reason, "tag"), "encrypted: tampered tag rejected");
+    FRESH(); copy[DAWN_ENC_HDR_LEN + 2] ^= 1;
+    CHECK(dawn_auth_unwrap(copy, elen, now, &plen, NULL) == NULL, "encrypted: tampered ciphertext rejected");
+    FRESH(); copy[12] ^= 1;
+    CHECK(dawn_auth_unwrap(copy, elen, now, &plen, NULL) == NULL, "encrypted: tampered nonce rejected");
+    FRESH(); copy[11] ^= 1; /* timestamp is authenticated data */
+    CHECK(dawn_auth_unwrap(copy, elen, now, &plen, NULL) == NULL, "encrypted: tampered timestamp rejected");
+    FRESH();
+    CHECK(dawn_auth_unwrap(copy, DAWN_ENC_OVERHEAD - 1, now, &plen, NULL) == NULL, "encrypted: truncated rejected");
+    FRESH();
+    CHECK(dawn_auth_unwrap(copy, elen - 1, now, &plen, NULL) == NULL, "encrypted: one byte short rejected");
+
+    /* Mixed networks: a receiver accepts both forms, whatever its own setting */
+    dawn_auth_set_encrypt(false);
+    FRESH();
+    CHECK(dawn_auth_unwrap(copy, elen, now, &plen, NULL) != NULL, "non-encrypting peer reads encrypted message");
+    size_t alen = 0;
+    char *a = dawn_auth_wrap(msg, len, now, &alen);
+    dawn_auth_set_encrypt(true);
+    CHECK(a && dawn_auth_unwrap(a, alen, now, &plen, NULL) != NULL, "encrypting peer reads authenticated-only message");
+
+    dawn_auth_set_key(KEY_B);
+    FRESH();
+    CHECK(dawn_auth_unwrap(copy, elen, now, &plen, &reason) == NULL && strstr(reason, "tag"), "encrypted: wrong key rejected");
+    dawn_auth_set_key("");
+    CHECK(!dawn_auth_encrypting(), "no key: not encrypting");
+    CHECK(dawn_auth_wrap(msg, len, now, &elen) == NULL, "no key: nothing sent");
+    dawn_auth_set_encrypt(false);
+    free(copy);
+    dawn_free(e);
+    dawn_free(e2);
+    dawn_free(a);
+    dawn_auth_set_key(KEY_B);
 
     dawn_auth_set_key(KEY_B);
     CHECK(dawn_auth_unwrap(w, wlen, now, &plen, &reason) == NULL && strstr(reason, "tag"), "wrong key rejected");

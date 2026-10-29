@@ -78,6 +78,8 @@ struct probe_metric_s {
     int kicking;
     int kicking_threshold;
     int duration;
+    int steer_max_misses;   // consecutive ignored kicks before backoff; 0 = never back off
+    int steer_backoff;      // seconds a client only gets friendly (non-disconnecting) requests
     int rrm_mode_mask;
     int rrm_mode_order[__RRM_BEACON_RQST_MODE_MAX];
 
@@ -135,6 +137,7 @@ struct network_config_s {
     int bandwidth;
     char auth_key[64 + 1];   // shared HMAC key, 64 hex characters (see dawn_auth.h)
     int accept_config_push;  // 0 = never; 1 = from any peer; 2 = only authenticated peers
+    int encrypt_peers;       // 1 = AES-256-GCM encrypt peer messages (needs auth_key)
 };
 
 #define ACCEPT_CONFIG_PUSH_NEVER 0
