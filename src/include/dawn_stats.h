@@ -96,6 +96,7 @@ struct dawn_stats_s {
 
     uint32_t peer_msgs_received;
     uint32_t peer_msgs_rejected_auth;
+    uint32_t peer_msgs_encrypted;     // accepted messages that arrived encrypted
     uint32_t config_push_applied;
     uint32_t config_push_ignored;
 

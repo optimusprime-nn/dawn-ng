@@ -404,6 +404,7 @@ struct network_config_s uci_get_dawn_network() {
         .bandwidth = -1,
         .auth_key = "",
         .accept_config_push = ACCEPT_CONFIG_PUSH_AUTHENTICATED,
+        .encrypt_peers = 0,
     };
 
     dawnlog_debug_func("Entering...");
@@ -457,6 +458,8 @@ struct network_config_s uci_get_dawn_network() {
                 snprintf(ret.auth_key, sizeof(ret.auth_key), "%s", str_auth_key);
             // CONFIG-N: accept_config_push|Apply configuration pushed by other DAWN instances|0 = Never; 1 = From any peer (unsafe without auth_key); [2 = Only from authenticated peers]
             DAWN_SET_CONFIG_INT(ret, s, accept_config_push);
+            // CONFIG-N: encrypt_peers|Encrypt messages between DAWN instances (AES-256-GCM, keyed from auth_key). Peers with a key accept both encrypted and plain authenticated messages, so APs can be switched one at a time; DAWN builds without encryption support can't read encrypted messages.|[0 = Authenticate only]; 1 = Encrypt (needs auth_key)
+            DAWN_SET_CONFIG_INT(ret, s, encrypt_peers);
             return ret;
         }
     }

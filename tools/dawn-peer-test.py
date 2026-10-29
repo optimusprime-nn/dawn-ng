@@ -35,11 +35,19 @@ import time
 DEFAULT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src", "test", "malformed_msgs.txt")
 
 
-def frame(payload: bytes, auth_key: bytes = None) -> bytes:
+def frame(payload: bytes, auth_key: bytes = None, encrypt: bool = False) -> bytes:
     # DAWN framing: 4 byte big-endian length (including the header itself),
     # then the JSON message including its terminating NUL.
     body = payload + b"\0"
-    if auth_key:
+    if auth_key and encrypt:
+        # dawn_auth: "DWE1" | 8 byte time | 12 byte nonce | AES-256-GCM(body) | 16 byte tag,
+        # key = HMAC-SHA256(auth_key, "DAWN peer encryption v1"), magic|time authenticated
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        head = b"DWE1" + struct.pack("!Q", int(time.time()))
+        nonce = os.urandom(12)
+        key = hmac.new(auth_key, b"DAWN peer encryption v1", hashlib.sha256).digest()
+        body = head + nonce + AESGCM(key).encrypt(nonce, body, head)
+    elif auth_key:
         # dawn_auth: "DWA1" | 8 byte big-endian time | HMAC-SHA256(magic|time|body) | body
         head = b"DWA1" + struct.pack("!Q", int(time.time()))
         body = head + hmac.new(auth_key, head + body, hashlib.sha256).digest() + body
@@ -107,6 +115,9 @@ def main():
     ap.add_argument("--auth-key", metavar="HEX",
                     help="sign messages with this auth_key (64 hex chars), as a trusted peer would. "
                          "Without it, a DAWN that has auth_key set should ignore every message")
+    ap.add_argument("--encrypt", action="store_true",
+                    help="with --auth-key: send encrypted messages, as a peer with encrypt_peers=1 "
+                         "(needs: pip install cryptography)")
     ap.add_argument("--include-config-push", action="store_true",
                     help="also send config-push messages (these CHANGE /etc/config/dawn on the router)")
     ap.add_argument("--bad-frames", action="store_true",
@@ -121,6 +132,13 @@ def main():
             key = b""
         if len(key) != 32:
             ap.error("--auth-key must be 64 hex characters")
+    if args.encrypt:
+        if not key:
+            ap.error("--encrypt needs --auth-key")
+        try:
+            import cryptography  # noqa: F401
+        except ImportError:
+            ap.error("--encrypt needs the Python 'cryptography' package (pip install cryptography)")
 
     if not alive(args.host, args.port, 3):
         print(f"Cannot connect to DAWN at {args.host}:{args.port}. Is it running with TCP networking?")
@@ -137,7 +155,7 @@ def main():
             print(f"[SKIP]     {label}: config push (use --include-config-push)")
             skipped += 1
             continue
-        tests.append((label, frame(msg, key)))
+        tests.append((label, frame(msg, key, args.encrypt)))
     if args.bad_frames:
         # Expected outcome for these: DAWN drops the connection but keeps running.
         tests += [
