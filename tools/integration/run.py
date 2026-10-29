@@ -171,7 +171,7 @@ class AP:
         self.procs[what] = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT, env=env)
 
     def start(self):
-        self.spawn("ubusd", [self.args.ubusd, "-s", self.sock])
+        self.spawn("ubusd", [self.args.ubusd, "-s", self.sock] + (["-A", self.args.acl_dir] if self.args.acl_dir else []))
         if not wait_for(lambda: os.path.exists(self.sock), 10, 0.1):
             raise RuntimeError(f"{self.name}: ubusd did not start")
         cmd = [self.args.fake, "-s", self.sock, "-i", self.ifname, "-b", self.bssid, "-f", str(self.freq), "-n", "TestNet"]
@@ -179,7 +179,7 @@ class AP:
             cmd += ["-p", str(p)]
         self.spawn("fake_hostapd", cmd)
         if not wait_for(lambda: "ready" in open(self.log("fake_hostapd")).read(), 10, 0.1):
-            raise RuntimeError(f"{self.name}: fake hostapd did not start")
+            raise RuntimeError(f"{self.name}: fake hostapd did not start:\n" + open(self.log("fake_hostapd")).read()[-2000:])
         env = dict(os.environ)
         env["FAKE_IWINFO"] = f"{self.ifname}={self.bssid},TestNet,{self.freq}"
         env.setdefault("ASAN_OPTIONS", "detect_leaks=0:abort_on_error=0")
@@ -468,6 +468,8 @@ def main():
     ap.add_argument("--fake", required=True, help="fake_hostapd binary")
     ap.add_argument("--ubusd", default=shutil.which("ubusd") or "/usr/sbin/ubusd")
     ap.add_argument("--ubus", default=shutil.which("ubus") or "/usr/bin/ubus")
+    ap.add_argument("--acl-dir", help="ubusd ACL directory (needed when not running as root: ubusd only "
+                    "lets non-root clients publish objects that a root-owned ACL file allows)")
     ap.add_argument("--keep", action="store_true", help="keep the logs directory")
     args = ap.parse_args()
 
