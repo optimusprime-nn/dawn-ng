@@ -42,6 +42,8 @@ for f in "$DIR"/*.apk; do
 		exit 1
 	fi
 	n=$((n + 1))
+	# Visible in the run's annotations: compare with the SHA256 LuCI shows on upload
+	echo "::notice title=Signed $(basename "$f")::sha256 $(sha256sum "$f" | cut -d' ' -f1)"
 done
 [ "$n" -gt 0 ] || { echo "::error::no .apk files in $DIR"; exit 1; }
 
