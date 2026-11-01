@@ -29,6 +29,8 @@ jobs:
 
       - name: Fetch LuCI runtime (luci-base + bootstrap theme)
         run: |
+          # RUNNER_TEMP outlives the job on self-hosted runners, and this copy is root-owned
+          rm -rf "$RUNNER_TEMP/luci"
           git clone --depth 1 --filter=blob:none --sparse https://github.com/openwrt/luci.git "$RUNNER_TEMP/luci"
           git -C "$RUNNER_TEMP/luci" sparse-checkout set modules/luci-base/htdocs themes/luci-theme-bootstrap/htdocs
 
