@@ -35,5 +35,18 @@ fi
 UBUSD="$PREFIX/sbin/ubusd"; [ -x "$UBUSD" ] || UBUSD="$(command -v ubusd)"
 UBUS="$PREFIX/bin/ubus"; [ -x "$UBUS" ] || UBUS="$(command -v ubus)"
 
+# ubusd lets non-root clients publish objects (hostapd.*, dawn, ...) only if
+# a root-owned ACL file allows it.
+if [ "$(id -u)" != 0 ]; then
+	ACL_DIR="/tmp/dawn-it-acl.$(id -u)"
+	printf '{"user":"%s","access":{"*":{"methods":["*"]}},"publish":["*"],"subscribe":["*"]}\n' "$(id -un)" > "$BUILD/acl.json"
+	if ! sudo -n install -d -o root -g root -m 755 "$ACL_DIR" ||
+		! sudo -n install -o root -g root -m 644 "$BUILD/acl.json" "$ACL_DIR/dawn-test.json"; then
+		echo "Not root and no passwordless sudo: create $ACL_DIR/dawn-test.json (owned by root) from $BUILD/acl.json, or run as root"
+		exit 1
+	fi
+	set -- --acl-dir "$ACL_DIR" "$@"
+fi
+
 exec python3 "$ROOT/tools/integration/run.py" --dawn "$BUILD/dawn/src/dawn" --fake "$BUILD/fake_hostapd" \
 	--ubusd "$UBUSD" --ubus "$UBUS" "$@"

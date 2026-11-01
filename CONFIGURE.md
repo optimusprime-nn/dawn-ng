@@ -81,13 +81,14 @@ but does not enforce this through a disconnection. Forced disconnection would be
 connect to.
 
 ### Stubborn clients
-Some clients ignore 802.11v requests, reject them, or come straight back to
-the AP they were sent away from. Forcing them off over and over just causes
-dropouts. After `steer_max_misses` such outcomes in a row (default 2) DAWN
-backs off from that client for `steer_backoff` seconds (default 3600): it
-only sends a friendly BSS transition request (no disassociation, no
-"don't come back" timer), at most once every 5 minutes. The client's next
-successful move, or an accepted request, ends the backoff. Set
+Some clients ignore 802.11v requests, reject them, or move and come
+straight back (within 10 minutes) to the AP they were sent away from.
+Forcing them off over and over just causes dropouts or ping-pong. After
+`steer_max_misses` such outcomes in a row (default 2) DAWN backs off from
+that client for `steer_backoff` seconds (default 3600): it only sends a
+friendly BSS transition request (no disassociation, no "don't come back"
+timer), at most once every 5 minutes. A move that sticks for 10 minutes
+ends the backoff. Set
 `steer_max_misses` to 0 to always force. The LuCI Steering page shows each
 client's record and whether it is backing off.
 

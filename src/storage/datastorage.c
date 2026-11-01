@@ -1,3 +1,5 @@
+#include <string.h>
+#include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
 
@@ -1344,8 +1346,11 @@ void insert_macs_from_file() {
     fp = fopen("/tmp/dawn_mac_list", "r");
     if (fp == NULL)
     {
-        dawnlog_error("Failed opening MAC list file - quitting!\n");
-        exit(EXIT_FAILURE);
+        // The "never kick" list is optional: no file just means an empty list
+        // (the init script creates it, but DAWN used to quit when run without it).
+        if (errno != ENOENT)
+            dawnlog_error("Failed opening MAC list file /tmp/dawn_mac_list: %s\n", strerror(errno));
+        return;
     }
 
     dawn_regmem(fp);

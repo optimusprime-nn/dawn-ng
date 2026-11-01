@@ -510,9 +510,10 @@ static int consume_actions(int argc, char* argv[], int harness_verbosity)
                 dawn_stats.kicks_sent[KICK_METHOD_GENTLE], dawn_stats.btm_accepted,
                 dawn_stats.btm_rejected, dawn_stats.backoffs_started);
             for (int i = 0; i < dawn_stats.client_count; i++)
-                printf("stats: client " MACSTR " requests=%u moved=%u stayed=%u rejected=%u misses=%u backoff=%d\n",
+                printf("stats: client " MACSTR " requests=%u moved=%u bounced=%u stayed=%u rejected=%u misses=%u backoff=%d\n",
                     MAC2STR(dawn_stats.clients[i].client.u8), dawn_stats.clients[i].requests,
-                    dawn_stats.clients[i].moved, dawn_stats.clients[i].stayed, dawn_stats.clients[i].rejected,
+                    dawn_stats.clients[i].moved, dawn_stats.clients[i].bounced,
+                    dawn_stats.clients[i].stayed, dawn_stats.clients[i].rejected,
                     dawn_stats.clients[i].misses, stats_client_in_backoff(dawn_stats.clients[i].client, faketime));
             for (int i = 0; i < dawn_stats.recent_count; i++)
                 printf("stats: kick " MACSTR " from " MACSTR " to " MACSTR " %s %s\n",

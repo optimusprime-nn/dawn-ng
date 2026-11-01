@@ -73,7 +73,7 @@ def build(dawn_config_path, variant):
       ],
       'clients': [
         {'client': '3C:22:FB:10:20:30', 'requests': 1, 'moved': 1, 'stayed': 0, 'rejected': 0, 'misses': 0, 'backoff_remaining': 0},
-        {'client': '00:1A:11:22:33:44', 'requests': 3, 'moved': 0, 'stayed': 2, 'rejected': 1, 'misses': 3, 'backoff_remaining': 2700},
+        {'client': '00:1A:11:22:33:44', 'requests': 3, 'moved': 1, 'bounced': 1, 'stayed': 2, 'rejected': 1, 'misses': 3, 'backoff_remaining': 2700},
       ]}
     hosts = {'3C:22:FB:10:20:30': {'name': 'pixel-8'}, 'F0:99:B6:44:55:66': {'name': 'macbook'}}
 

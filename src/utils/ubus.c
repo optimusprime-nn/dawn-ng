@@ -1769,6 +1769,7 @@ static int get_stats(struct ubus_context *ctx_local, struct ubus_object *obj,
         blobmsg_add_mac_string(&b, "client", c->client);
         blobmsg_add_u32(&b, "requests", c->requests);
         blobmsg_add_u32(&b, "moved", c->moved);
+        blobmsg_add_u32(&b, "bounced", c->bounced);
         blobmsg_add_u32(&b, "stayed", c->stayed);
         blobmsg_add_u32(&b, "rejected", c->rejected);
         blobmsg_add_u32(&b, "misses", c->misses);

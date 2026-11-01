@@ -1,0 +1,42 @@
+# A client that accepts every request, moves, and comes straight back to the
+# AP it was moved away from (ping-pong) goes into steering backoff too.
+dawn default
+dawn min_number_to_kick=1
+dawn kicking=1
+dawn bandwidth_threshold=0
+sim_moves 0
+faketime set 1000
+ap bssid=11:22:33:44:55:66 neighbors=112233445566
+ap bssid=22:33:44:55:66:77 neighbors=223344556677
+probe bssid=11:22:33:44:55:66 client=ff:ee:dd:cc:bb:aa signal=-85
+probe bssid=22:33:44:55:66:77 client=ff:ee:dd:cc:bb:aa signal=-50
+client bssid=11:22:33:44:55:66 client=ff:ee:dd:cc:bb:aa
+# Kick 1: moves after 3 s...
+kick 11:22:33:44:55:66 0
+faketime set 1003
+client bssid=22:33:44:55:66:77 client=ff:ee:dd:cc:bb:aa
+# ...a report from before the move arrives: ignored (grace period)
+faketime set 1005
+client bssid=11:22:33:44:55:66 client=ff:ee:dd:cc:bb:aa
+stats_show
+# ...and is back 4 minutes later: bounce, miss 1
+faketime set 1240
+client bssid=11:22:33:44:55:66 client=ff:ee:dd:cc:bb:aa
+stats_show
+# Kick 2: same again -> miss 2 -> backoff
+kick 11:22:33:44:55:66 0
+faketime set 1243
+client bssid=22:33:44:55:66:77 client=ff:ee:dd:cc:bb:aa
+faketime set 1480
+client bssid=11:22:33:44:55:66 client=ff:ee:dd:cc:bb:aa
+stats_show
+# Now only a friendly request, at most every 5 minutes
+kick 11:22:33:44:55:66 0
+faketime set 1490
+kick 11:22:33:44:55:66 0
+stats_show
+#expect stats: client FF:EE:DD:CC:BB:AA requests=1 moved=1 bounced=0 stayed=0 rejected=0 misses=0 backoff=0
+#expect stats: client FF:EE:DD:CC:BB:AA requests=1 moved=1 bounced=1 stayed=0 rejected=0 misses=1 backoff=0
+#expect stats: client FF:EE:DD:CC:BB:AA requests=2 moved=2 bounced=2 stayed=0 rejected=0 misses=2 backoff=1
+#expect stats: client FF:EE:DD:CC:BB:AA requests=3 moved=2 bounced=2 stayed=0 rejected=0 misses=2 backoff=1
+#expect stats: gentle=1 btm_accepted=0 btm_rejected=0 backoffs=1

@@ -43,6 +43,16 @@ define Package/dawn/description
   LuCI's "Upload Package...".
 endef
 
+# OpenWrt's default post-install only "start"s the service, which leaves an
+# already running (older) daemon in place after an upgrade - including one
+# done through LuCI. Restart it so the new binary actually runs.
+define Package/dawn/postinst
+#!/bin/sh
+[ -n "$${IPKG_INSTROOT}" ] && exit 0
+/etc/init.d/dawn running >/dev/null 2>&1 && /etc/init.d/dawn restart
+exit 0
+endef
+
 define Package/dawn/conffiles
 /etc/config/dawn
 endef

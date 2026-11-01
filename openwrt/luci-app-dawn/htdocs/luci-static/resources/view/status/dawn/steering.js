@@ -89,7 +89,8 @@ return view.extend({
 		return E('div', {}, [
 			E('p', { 'class': 'cbi-section-descr' },
 				_('Running for %s. Peer messages %s.').format(fmtDuration(stats.uptime || 0),
-					stats.peer_auth ? _('are authenticated') : _('are NOT authenticated'))),
+					stats.peer_encryption ? _('are authenticated and encrypted')
+						: stats.peer_auth ? _('are authenticated') : _('are NOT authenticated'))),
 
 			E('h3', {}, _('Steering')),
 			E('div', { 'style': 'display:flex; flex-wrap:wrap; gap:.6em; margin-bottom:1em' }, [
@@ -119,13 +120,14 @@ return view.extend({
 
 			E('h3', { 'style': 'margin-top:1em' }, _('Client behaviour')),
 			E('p', { 'class': 'cbi-section-descr' },
-				_('Clients that ignore or reject steering, or come straight back to the same access point, are not forced off again for a while: they only get friendly requests (see steer_max_misses / steer_backoff).')),
+				_('Clients that ignore or reject steering, or move and come straight back (within 10 minutes), are not forced off again for a while: they only get friendly requests (see steer_max_misses / steer_backoff).')),
 			(stats.clients || []).length
 				? E('table', { 'class': 'table' }, [
 					E('tr', { 'class': 'tr table-titles' }, [
 						E('th', { 'class': 'th' }, _('Client')),
 						E('th', { 'class': 'th' }, _('Requests')),
 						E('th', { 'class': 'th' }, _('Moved')),
+						E('th', { 'class': 'th', 'title': _('Moved, then back on the same access point within 10 minutes') }, _('Came back')),
 						E('th', { 'class': 'th' }, _('Stayed')),
 						E('th', { 'class': 'th' }, _('Rejected')),
 						E('th', { 'class': 'th' }, _('Status'))
@@ -137,6 +139,7 @@ return view.extend({
 						E('td', { 'class': 'td' }, dawn.getHostnameFromMAC(hosts, c.client)),
 						E('td', { 'class': 'td' }, String(c.requests)),
 						E('td', { 'class': 'td' }, String(c.moved)),
+						E('td', { 'class': 'td' }, String(c.bounced || 0)),
 						E('td', { 'class': 'td' }, String(c.stayed)),
 						E('td', { 'class': 'td' }, String(c.rejected)),
 						E('td', { 'class': 'td' }, c.backoff_remaining
