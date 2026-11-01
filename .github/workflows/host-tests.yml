@@ -33,6 +33,8 @@ jobs:
         run: PREFIX="$HOME/deps" tools/ci/run-host-tests.sh
 
       - name: Daemon integration test (two APs, fake hostapd)
+        # Job containers default to sh (dash), which has no pipefail
+        shell: bash
         run: |
           set -o pipefail
           PREFIX="$HOME/deps" tools/ci/run-integration-test.sh 2>&1 | tee "$RUNNER_TEMP/it.log" || {
