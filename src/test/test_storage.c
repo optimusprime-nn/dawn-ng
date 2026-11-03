@@ -498,6 +498,17 @@ static int consume_actions(int argc, char* argv[], int harness_verbosity)
                 stats_btm_response(c, atoi(argv[2]), faketime);
             }
         }
+        else if (strcmp(*argv, "assoc") == 0) // assoc <client> <bssid>: hostapd (re)association event
+        {
+            args_required = 3;
+            if (curr_arg + args_required <= argc)
+            {
+                struct dawn_mac c, ap;
+                hwaddr_aton(argv[1], c.u8);
+                hwaddr_aton(argv[2], ap.u8);
+                stats_client_associated(c, ap, faketime);
+            }
+        }
         else if (strcmp(*argv, "stats_show") == 0)
         {
             args_required = 1;
@@ -506,9 +517,9 @@ static int consume_actions(int argc, char* argv[], int harness_verbosity)
                 dawn_stats.evaluations, dawn_stats.stays, dawn_stats.kicks_deferred,
                 dawn_stats.kicks_sent[KICK_METHOD_RSSI_COMPARE], dawn_stats.kicks_sent[KICK_METHOD_ABSOLUTE_RSSI],
                 dawn_stats.kicks_moved, dawn_stats.kicks_stayed, dawn_stats.kicks_failed);
-            printf("stats: gentle=%u btm_accepted=%u btm_rejected=%u backoffs=%u\n",
+            printf("stats: gentle=%u btm_accepted=%u btm_rejected=%u backoffs=%u held=%u\n",
                 dawn_stats.kicks_sent[KICK_METHOD_GENTLE], dawn_stats.btm_accepted,
-                dawn_stats.btm_rejected, dawn_stats.backoffs_started);
+                dawn_stats.btm_rejected, dawn_stats.backoffs_started, dawn_stats.kicks_held);
             for (int i = 0; i < dawn_stats.client_count; i++)
                 printf("stats: client " MACSTR " requests=%u moved=%u bounced=%u stayed=%u rejected=%u misses=%u backoff=%d\n",
                     MAC2STR(dawn_stats.clients[i].client.u8), dawn_stats.clients[i].requests,
@@ -704,6 +715,7 @@ static int consume_actions(int argc, char* argv[], int harness_verbosity)
                 else if (!strncmp(fn, "chan_util=", 10)) load_int_band(dawn_metric.chan_util, fn + 10);
                 else if (!strncmp(fn, "max_chan_util=", 14)) load_int_band(dawn_metric.max_chan_util, fn + 14);
                 else if (!strncmp(fn, "rssi_val=", 9)) load_int_band(dawn_metric.rssi_val, fn + 9);
+                else if (!strncmp(fn, "rssi_center=", 12)) load_int_band(dawn_metric.rssi_center, fn + 12);
                 else if (!strncmp(fn, "low_rssi_val=", 13)) load_int_band(dawn_metric.low_rssi_val, fn + 13);
                 else if (!strncmp(fn, "chan_util_val=", 14)) load_int_band(dawn_metric.chan_util_val, fn + 14);
                 else if (!strncmp(fn, "max_chan_util_val=", 18)) load_int_band(dawn_metric.max_chan_util_val, fn + 18);

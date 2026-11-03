@@ -61,8 +61,15 @@ struct kick_record {
  * straight back (within STATS_BOUNCE_WINDOW - otherwise it ping-pongs:
  * moved, back, kicked again, ...). After steer_max_misses consecutive
  * misses the client is in backoff for steer_backoff seconds: it only gets
- * friendly requests (no forced disassociation). A move that sticks for
- * STATS_BOUNCE_WINDOW resets it.
+ * friendly requests (no forced disassociation), at most every
+ * STATS_GENTLE_INTERVAL. A client that goes into backoff again gets a longer
+ * one each time (doubling, up to a day; friendly requests up to hourly). A
+ * move that sticks for STATS_BOUNCE_WINDOW resets all of that.
+ *
+ * Coming back is detected from the client's (re)association to the old AP,
+ * not from client lists: hostapd keeps a station that silently left listed
+ * for a few minutes (ap_max_inactivity), which looks like the client is
+ * still there - DAWN used to ask such "ghosts" to move every evaluation.
  */
 #define STATS_TRACKED_CLIENTS 128
 
@@ -75,6 +82,8 @@ struct client_steering {
     uint16_t rejected;
     uint16_t bounced;               // moved, then came back within STATS_BOUNCE_WINDOW
     uint8_t misses;                 // consecutive
+    uint8_t backoff_level;          // backoffs since the last move that stuck
+    time_t last_request;
     time_t backoff_until;
     time_t last_gentle;             // last friendly request while in backoff
     struct dawn_mac moved_from;     // last move, until it stuck or bounced
@@ -85,7 +94,15 @@ struct client_steering {
 // was moved away from within this time. Sightings on the old AP in the first
 // STATS_BOUNCE_GRACE seconds are ignored (reports from before the move).
 #define STATS_BOUNCE_WINDOW 600
-#define STATS_BOUNCE_GRACE 20
+
+// No new request within this time of the last one (outcomes take up to 60 s)
+#define STATS_MIN_REQUEST_INTERVAL 60
+// After a move, the old AP can list the client for this long (hostapd's
+// default ap_max_inactivity): don't ask that ghost to move
+#define STATS_GHOST_HOLD 300
+// Upper limits for the escalating backoff and friendly request interval
+#define STATS_BACKOFF_MAX 86400
+#define STATS_GENTLE_MAX 3600
 
 // While in backoff, at most one friendly request per client this often
 #define STATS_GENTLE_INTERVAL 300
@@ -96,7 +113,8 @@ struct dawn_stats_s {
     uint32_t evaluations;           // client evaluations by the kicking logic
     uint32_t stays;                 // ... where the current AP was best
     uint32_t kicks_deferred;        // wanted to kick, below min_number_to_kick
-    uint32_t kicks_skipped_active;  // wanted to kick, client was transferring data
+    uint32_t kicks_skipped_active;
+    uint32_t kicks_held;              // not asked: asked recently, just moved, or backing off  // wanted to kick, client was transferring data
     uint32_t kicks_sent[__KICK_METHOD_MAX]; // indexed by enum kick_method
     uint32_t btm_accepted;
     uint32_t btm_rejected;
@@ -145,6 +163,15 @@ const struct client_steering *stats_client_lookup(struct dawn_mac client);
 
 /** In backoff: may this client be sent another friendly request yet? */
 int stats_gentle_due(struct dawn_mac client, time_t now);
+
+/**
+ * Should DAWN hold off asking this client to move right now? Returns a
+ * short reason for the log, or NULL if a request may be sent.
+ */
+const char *stats_request_hold(struct dawn_mac client, time_t now);
+
+/** The client (re)associated to bssid (a local hostapd 'assoc' event). */
+void stats_client_associated(struct dawn_mac client, struct dawn_mac bssid, time_t now);
 
 /** Clock used for kick records; tests replace it with a fake one. */
 extern time_t (*dawn_stats_clock)(void);

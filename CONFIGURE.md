@@ -81,16 +81,21 @@ but does not enforce this through a disconnection. Forced disconnection would be
 connect to.
 
 ### Stubborn clients
+DAWN asks a client to move at most once a minute, and not at all for 5
+minutes after it moved away (the old AP keeps listing a station that left
+silently for that long, hostapd's `ap_max_inactivity`). "Weak signal"
+(absolute RSSI) steering only proposes APs that hear the client at least
+6 dB better; a client that is weak everywhere is left alone.
+
 Some clients ignore 802.11v requests, reject them, or move and come
-straight back (within 10 minutes) to the AP they were sent away from.
-Forcing them off over and over just causes dropouts or ping-pong. After
-`steer_max_misses` such outcomes in a row (default 2) DAWN backs off from
-that client for `steer_backoff` seconds (default 3600): it only sends a
-friendly BSS transition request (no disassociation, no "don't come back"
-timer), at most once every 5 minutes. A move that sticks for 10 minutes
-ends the backoff. Set
-`steer_max_misses` to 0 to always force. The LuCI Steering page shows each
-client's record and whether it is backing off.
+straight back (re-associate within 10 minutes) to the AP they were sent
+away from. After `steer_max_misses` such outcomes in a row (default 2)
+DAWN backs off from that client for `steer_backoff` seconds (default
+3600): it only sends a friendly BSS transition request (no disassociation,
+no "don't come back" timer), at most once every 5 minutes. If the client
+needs another backoff after that, it is twice as long, and so on up to a
+day (friendly requests up to hourly). A move that sticks for 10 minutes
+resets all of this.
 
 ### Other Features
 The following are less likely to need attention:

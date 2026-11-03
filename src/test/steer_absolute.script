@@ -1,0 +1,52 @@
+# Absolute RSSI steering ("weak signal here"):
+# - a client that no other AP hears clearly better is not asked to move
+# - otherwise it is asked once, not on every evaluation
+# - staying counts against it like any other request, so it backs off,
+#   and each new backoff is longer than the last
+dawn default
+dawn min_number_to_kick=1
+dawn kicking=2
+dawn rssi_center=-70
+dawn bandwidth_threshold=0
+sim_moves 0
+faketime set 1000
+ap bssid=11:22:33:44:55:66 neighbors=112233445566
+ap bssid=22:33:44:55:66:77 neighbors=223344556677
+# Weak here, and just as weak there: no request
+probe bssid=11:22:33:44:55:66 client=ff:ee:dd:cc:bb:aa signal=-85
+probe bssid=22:33:44:55:66:77 client=ff:ee:dd:cc:bb:aa signal=-83
+client bssid=11:22:33:44:55:66 client=ff:ee:dd:cc:bb:aa
+kick 11:22:33:44:55:66 0
+stats_show
+# The other AP hears it 15 dB better: one request
+probe bssid=22:33:44:55:66:77 client=ff:ee:dd:cc:bb:aa signal=-70
+faketime set 1010
+kick 11:22:33:44:55:66 0
+faketime set 1020
+kick 11:22:33:44:55:66 0
+stats_show
+# It stays (twice) -> backoff 1 (1 h)
+faketime set 1080
+client bssid=11:22:33:44:55:66 client=ff:ee:dd:cc:bb:aa
+kick 11:22:33:44:55:66 0
+faketime set 1150
+client bssid=11:22:33:44:55:66 client=ff:ee:dd:cc:bb:aa
+stats_show
+# After the hour it gets two more chances, stays again -> backoff 2 (2 h)
+faketime set 4800
+client bssid=11:22:33:44:55:66 client=ff:ee:dd:cc:bb:aa
+kick 11:22:33:44:55:66 0
+faketime set 4870
+client bssid=11:22:33:44:55:66 client=ff:ee:dd:cc:bb:aa
+kick 11:22:33:44:55:66 0
+faketime set 4940
+client bssid=11:22:33:44:55:66 client=ff:ee:dd:cc:bb:aa
+stats_show
+# Still backing off 1.5 h later (an unescalated backoff would have ended)
+faketime set 10300
+client bssid=11:22:33:44:55:66 client=ff:ee:dd:cc:bb:aa
+stats_show
+#expect stats: client FF:EE:DD:CC:BB:AA requests=1 moved=0 bounced=0 stayed=0 rejected=0 misses=0 backoff=0
+#expect stats: client FF:EE:DD:CC:BB:AA requests=2 moved=0 bounced=0 stayed=2 rejected=0 misses=2 backoff=1
+#expect stats: client FF:EE:DD:CC:BB:AA requests=4 moved=0 bounced=0 stayed=4 rejected=0 misses=2 backoff=1
+#reject stats: client FF:EE:DD:CC:BB:AA requests=2 moved=0 bounced=0 stayed=0

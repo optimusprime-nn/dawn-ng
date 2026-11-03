@@ -543,20 +543,28 @@ int kick_clients(struct dawn_mac bssid_mac, uint32_t id) {
             if ((kick_type == 0) && own_probe && (dawn_metric.kicking & 2) == 2) {
                 int band = get_band(own_probe->freq);
 
-                if (own_probe->signal < dawn_metric.rssi_center[band])
+                // signal is stored as uint32_t: compare as the signed dBm it is
+                if ((int)own_probe->signal < dawn_metric.rssi_center[band])
                 {
                     dawnlog_info("Client " MACSTR ": Low asolute RSSI - proposing other APs\n", MAC2STR(j->client_addr.u8));
                     dawn_mutex_require(&ap_array_mutex);
 
-                    // FIXME: Using all AP is OK for a small network, but should ideally use the local-to-current-AP set
+                    // Only propose APs this client has actually been heard by, clearly
+                    // better than here. Proposing every AP with the same SSID made DAWN
+                    // ask clients that are weak everywhere to move, every evaluation.
                     for (ap* candidate_ap = ap_set; candidate_ap != NULL; candidate_ap = candidate_ap->next_ap) {
-                        // Check is same SSID< but is not the current AP
-                        if (candidate_ap != kicking_ap && strcmp((char*)kicking_ap->ssid, (char*)candidate_ap->ssid) == 0) {
+                        if (candidate_ap == kicking_ap || strcmp((char*)kicking_ap->ssid, (char*)candidate_ap->ssid) != 0)
+                            continue;
+                        probe_entry* there = probe_array_get_entry(j->client_addr, candidate_ap->bssid_addr);
+                        if (there && (int)there->signal >= (int)own_probe->signal + ABSOLUTE_RSSI_MARGIN)
                             insert_kicking_nr_by_bssid(&kick_nr_list, candidate_ap);
-                        }
                     }
 
-                    kick_type = 2;
+                    if (kick_nr_list)
+                        kick_type = 2;
+                    else
+                        dawnlog_info("Client " MACSTR ": no AP hears it at least %d dB better - not proposing a move\n",
+                                MAC2STR(j->client_addr.u8), ABSOLUTE_RSSI_MARGIN);
                 }
             }
         }
@@ -576,13 +584,16 @@ int kick_clients(struct dawn_mac bssid_mac, uint32_t id) {
             }
             else {
                 time_t now = dawn_stats_clock();
-                int gentle = kick_type == 1 && stats_client_in_backoff(j->client_addr, now);
+                int gentle = stats_client_in_backoff(j->client_addr, now);
                 float rx_rate, tx_rate;
                 bool have_bandwidth_iwinfo = false;
+                const char *hold = stats_request_hold(j->client_addr, now);
 
-                if (gentle && !stats_gentle_due(j->client_addr, now)) {
-                    // In backoff and asked recently: don't nag it every evaluation
-                    dawnlog_info("Client " MACSTR ": in steering backoff, asked recently - not asking again yet\n", MAC2STR(j->client_addr.u8));
+                if (hold) {
+                    // Asked recently, just moved away (the old AP lists it for a
+                    // few more minutes), or backing off: don't ask every evaluation
+                    dawn_stats.kicks_held++;
+                    dawnlog_info("Client " MACSTR ": not asking it to move: %s\n", MAC2STR(j->client_addr.u8), hold);
                 }
                 else if (!(have_bandwidth_iwinfo = get_bandwidth_iwinfo(j->client_addr, &rx_rate, &tx_rate)) && dawn_metric.bandwidth_threshold > 0) {
                     dawn_stats.kicks_skipped_active++;
@@ -621,9 +632,12 @@ int kick_clients(struct dawn_mac bssid_mac, uint32_t id) {
                             // don't deauth station? <- deauth is better!
                             // maybe we can use handovers...
                             //del_client_interface(id, client_array[j].client_addr, NO_MORE_STAS, 1, 1000);
+                            // Needs min_number_to_kick evaluations in a row again before the next request
+                            j->kick_count = 0;
+
                             if (gentle)
                             {
-                                // This client keeps ignoring forced kicks: only ask nicely
+                                // This client keeps ignoring requests: only ask nicely
                                 // (no disassociation imminent, so hostapd won't drop it).
                                 dawnlog_info("Client " MACSTR ": in steering backoff, sending a friendly request only\n", MAC2STR(j->client_addr.u8));
                                 int ret = bss_transition_request(id, j->client_addr, kick_nr_list, dawn_metric.duration);

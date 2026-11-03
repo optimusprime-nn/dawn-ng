@@ -397,7 +397,8 @@ def run(args, base):
             B.probe(stubborn, -45)
             c = client_stats(A, stubborn)
             return c and c.get("backoff_remaining", 0) > 0
-        check(bool(wait_for(backed_off, 60, 1)), "client that keeps rejecting is backed off")
+        # Requests to one client are at least a minute apart: two rejections take ~1-2 min
+        check(bool(wait_for(backed_off, 150, 1)), "client that keeps rejecting is backed off")
 
         def gentle_request():
             A.probe(stubborn, -85)
