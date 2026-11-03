@@ -40,7 +40,7 @@ client bssid=11:22:33:44:55:66 client=ff:ee:dd:cc:bb:aa
 kick 11:22:33:44:55:66 0
 stats_show
 #expect stats: client FF:EE:DD:CC:BB:AA requests=2 moved=0 bounced=0 stayed=2 rejected=0 misses=2 backoff=1
-#expect stats: gentle=1 btm_accepted=0 btm_rejected=0 backoffs=1
+#expect stats: gentle=1 btm_accepted=0 btm_rejected=0 backoffs=1 held=2
 #expect stats: client FF:EE:DD:CC:BB:AA requests=3 moved=0 bounced=0 stayed=2 rejected=0 misses=2 backoff=1
 #expect stats: client FF:EE:DD:CC:BB:AA requests=3 moved=1 bounced=0 stayed=2 rejected=0 misses=2 backoff=1
 #expect stats: client FF:EE:DD:CC:BB:AA requests=3 moved=1 bounced=0 stayed=2 rejected=0 misses=0 backoff=0

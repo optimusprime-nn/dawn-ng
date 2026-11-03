@@ -159,6 +159,9 @@ extern struct probe_metric_s dawn_metric;
 
 #define SSID_MAX_LEN 32
 
+// Absolute RSSI steering: only propose APs that hear the client at least this much better
+#define ABSOLUTE_RSSI_MARGIN 6
+
 // Upper bound on the "never kick" MAC list (and so /tmp/dawn_mac_list)
 #define MAC_LIST_MAX 1024
 

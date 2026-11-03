@@ -56,6 +56,22 @@ static struct client_steering *client_get(struct dawn_mac client, time_t now) {
 static void client_hit(struct client_steering *c) {
     c->misses = 0;
     c->backoff_until = 0;
+    c->backoff_level = 0;
+}
+
+// policy_backoff, doubled for each backoff since the last move that stuck
+static time_t backoff_length(const struct client_steering *c) {
+    time_t len = policy_backoff;
+    for (int i = 1; i < c->backoff_level && len < STATS_BACKOFF_MAX; i++)
+        len *= 2;
+    return len < STATS_BACKOFF_MAX ? len : STATS_BACKOFF_MAX;
+}
+
+static time_t gentle_interval(const struct client_steering *c) {
+    time_t len = STATS_GENTLE_INTERVAL;
+    for (int i = 1; i < c->backoff_level && len < STATS_GENTLE_MAX; i++)
+        len *= 2;
+    return len < STATS_GENTLE_MAX ? len : STATS_GENTLE_MAX;
 }
 
 static void client_miss(struct client_steering *c, time_t now) {
@@ -63,7 +79,9 @@ static void client_miss(struct client_steering *c, time_t now) {
         c->misses++;
 
     if (policy_max_misses > 0 && c->misses >= policy_max_misses && c->backoff_until <= now) {
-        c->backoff_until = now + policy_backoff;
+        if (c->backoff_level < 16)
+            c->backoff_level++;
+        c->backoff_until = now + backoff_length(c);
         dawn_stats.backoffs_started++;
     }
 }
@@ -79,7 +97,7 @@ int stats_client_in_backoff(struct dawn_mac client, time_t now) {
         return 0;
 
     if (now >= c->backoff_until) {
-        // Backoff over: give the client a fresh start
+        // Backoff over: try again (backoff_level stays, so the next one is longer)
         c->backoff_until = 0;
         c->misses = 0;
         return 0;
@@ -115,6 +133,7 @@ void stats_kick(time_t now, int method, struct dawn_mac client, struct dawn_mac 
             struct client_steering *c = client_get(client, now);
             if (c->requests < UINT16_MAX)
                 c->requests++;
+            c->last_request = now;
             if (method == KICK_METHOD_GENTLE)
                 c->last_gentle = now;
         }
@@ -126,24 +145,11 @@ void stats_kick(time_t now, int method, struct dawn_mac client, struct dawn_mac 
 }
 
 void stats_client_seen(struct dawn_mac client, struct dawn_mac bssid, time_t now) {
-    // Watch the last move: did the client come back, or did it stick?
+    // A move that didn't come back (stats_client_associated) has stuck
     struct client_steering *w = client_find(client);
-    if (w && w->moved_at) {
-        if (mac_is_equal_bb(bssid, w->moved_from)) {
-            if (now - w->moved_at >= STATS_BOUNCE_GRACE) {
-                if (now - w->moved_at <= STATS_BOUNCE_WINDOW) {
-                    if (w->bounced < UINT16_MAX)
-                        w->bounced++;
-                    w->last_seen = now;
-                    client_miss(w, now);
-                }
-                w->moved_at = 0;
-            }
-        }
-        else if (now - w->moved_at > STATS_BOUNCE_WINDOW) {
-            client_hit(w); // the move stuck
-            w->moved_at = 0;
-        }
+    if (w && w->moved_at && now - w->moved_at > STATS_BOUNCE_WINDOW) {
+        client_hit(w);
+        w->moved_at = 0;
     }
 
     for (int i = 0; i < dawn_stats.recent_count; i++) {
@@ -172,9 +178,11 @@ void stats_client_seen(struct dawn_mac client, struct dawn_mac bssid, time_t now
             struct client_steering *c = client_get(client, now);
             if (c->stayed < UINT16_MAX)
                 c->stayed++;
-            // A gentle request can be ignored without disrupting the client,
-            // so only a stay after a forcing kick counts against it.
-            if (r->method == KICK_METHOD_RSSI_COMPARE || r->btm_response == BTM_RESPONSE_REJECTED)
+            // Asked and stayed. A friendly request in backoff may be ignored
+            // without counting (it's already backing off).
+            // A rejection was already counted when it arrived.
+            if ((r->method == KICK_METHOD_RSSI_COMPARE || r->method == KICK_METHOD_ABSOLUTE_RSSI) &&
+                    r->btm_response != BTM_RESPONSE_REJECTED)
                 client_miss(c, now);
         }
     }
@@ -210,7 +218,36 @@ void stats_btm_response(struct dawn_mac client, int status_code, time_t now) {
 
 int stats_gentle_due(struct dawn_mac client, time_t now) {
     const struct client_steering *c = client_find(client);
-    return !c || c->last_gentle == 0 || now - c->last_gentle >= STATS_GENTLE_INTERVAL;
+    return !c || c->last_gentle == 0 || now - c->last_gentle >= gentle_interval(c);
+}
+
+const char *stats_request_hold(struct dawn_mac client, time_t now) {
+    const struct client_steering *c = client_find(client);
+
+    if (!c)
+        return NULL;
+    if (stats_client_in_backoff(client, now))
+        return stats_gentle_due(client, now) ? NULL : "backing off, asked recently";
+    if (c->last_request && now - c->last_request < STATS_MIN_REQUEST_INTERVAL)
+        return "asked less than a minute ago";
+    if (c->moved_at && now - c->moved_at < STATS_GHOST_HOLD)
+        return "just moved to another AP (this AP may still list it for a few minutes)";
+    return NULL;
+}
+
+void stats_client_associated(struct dawn_mac client, struct dawn_mac bssid, time_t now) {
+    struct client_steering *c = client_find(client);
+
+    if (!c || !c->moved_at)
+        return;
+    if (mac_is_equal_bb(bssid, c->moved_from) && now - c->moved_at <= STATS_BOUNCE_WINDOW) {
+        // Moved away, then associated to the old AP again: came straight back
+        if (c->bounced < UINT16_MAX)
+            c->bounced++;
+        c->last_seen = now;
+        c->moved_at = 0;
+        client_miss(c, now);
+    }
 }
 
 const char *stats_method_name(int method) {

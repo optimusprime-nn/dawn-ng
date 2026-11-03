@@ -506,6 +506,12 @@ static int handle_assoc_req(struct blob_attr *msg) {
     else
     {
         parse_to_client_req(msg, assoc_req);
+
+        // Steering statistics: a client we moved away coming back to this AP
+        dawn_mutex_lock(&client_array_mutex);
+        stats_client_associated(assoc_req->client_addr, assoc_req->bssid_addr, dawn_stats_clock());
+        dawn_mutex_unlock(&client_array_mutex);
+
         dawnlog_debug("Association entry: ");
         print_client_req_entry(DAWNLOG_DEBUG, assoc_req);
 
@@ -1714,6 +1720,7 @@ static int get_stats(struct ubus_context *ctx_local, struct ubus_object *obj,
     blobmsg_add_u32(&b, "stays", dawn_stats.stays);
     blobmsg_add_u32(&b, "deferred", dawn_stats.kicks_deferred);
     blobmsg_add_u32(&b, "skipped_active", dawn_stats.kicks_skipped_active);
+    blobmsg_add_u32(&b, "held", dawn_stats.kicks_held);
     blobmsg_add_u32(&b, "sent_rssi_compare", dawn_stats.kicks_sent[KICK_METHOD_RSSI_COMPARE]);
     blobmsg_add_u32(&b, "sent_absolute_rssi", dawn_stats.kicks_sent[KICK_METHOD_ABSOLUTE_RSSI]);
     blobmsg_add_u32(&b, "force_reconnects", dawn_stats.kicks_sent[KICK_METHOD_FORCE_RECONNECT]);

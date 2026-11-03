@@ -99,8 +99,8 @@ return view.extend({
 				tile(sent, _('Steering requests sent')),
 				tile(resolved ? Math.round(100 * (st.moved || 0) / resolved) + '%' : '–', _('Clients that moved'),
 					_('Of resolved requests: moved to another AP vs. still on the same AP after 60 s')),
-				tile((st.deferred || 0) + (st.skipped_active || 0), _('Requests held back'),
-					_('Waiting for min_number_to_kick confirmations, or client was busy transferring data')),
+				tile((st.deferred || 0) + (st.skipped_active || 0) + (st.held || 0), _('Requests held back'),
+					_('Waiting for min_number_to_kick confirmations, client busy transferring data, asked recently, just moved away, or backing off')),
 				tile(st.failed || 0, _('Failed requests'), _('hostapd refused the request'))
 			]),
 
